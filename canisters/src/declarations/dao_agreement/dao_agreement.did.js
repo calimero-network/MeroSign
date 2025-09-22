@@ -30,7 +30,6 @@ export const idlFactory = ({ IDL }) => {
     'status' : MilestoneStatus,
     'title' : IDL.Text,
     'milestone_type' : MilestoneType,
-    'executed_at' : IDL.Opt(IDL.Nat64),
     'votes' : IDL.Vec(IDL.Tuple(IDL.Principal, IDL.Bool)),
     'recipient' : IDL.Principal,
     'description' : IDL.Text,
@@ -97,8 +96,6 @@ export const idlFactory = ({ IDL }) => {
     'get_agreement' : IDL.Func([IDL.Text], [IDL.Opt(Agreement)], ['query']),
     'get_agreement_balance' : IDL.Func([IDL.Text], [IDL.Nat], ['query']),
     'get_canister_principal' : IDL.Func([], [IDL.Principal], ['query']),
-    'get_ledger_canister_id' : IDL.Func([], [IDL.Principal], ['query']),
-    'get_mainnet_ledger_id' : IDL.Func([], [IDL.Principal], ['query']),
     'get_milestone_voting_status' : IDL.Func(
         [IDL.Text, IDL.Nat64],
         [Result_1],
@@ -108,7 +105,6 @@ export const idlFactory = ({ IDL }) => {
     'list_events' : IDL.Func([], [IDL.Vec(Event)], ['query']),
     'set_ledger_canister_id' : IDL.Func([IDL.Principal], [Result], []),
     'sign_document' : IDL.Func([IDL.Text, IDL.Text], [Result], []),
-    'use_mainnet_ledger' : IDL.Func([], [Result], []),
     'vote_milestone' : IDL.Func([IDL.Text, IDL.Nat64, IDL.Bool], [Result], []),
   });
 };

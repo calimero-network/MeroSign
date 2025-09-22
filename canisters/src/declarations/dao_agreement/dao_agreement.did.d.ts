@@ -38,7 +38,6 @@ export interface Milestone {
   'status' : MilestoneStatus,
   'title' : string,
   'milestone_type' : MilestoneType,
-  'executed_at' : [] | [bigint],
   'votes' : Array<[Principal, boolean]>,
   'recipient' : Principal,
   'description' : string,
@@ -94,14 +93,11 @@ export interface _SERVICE {
   'get_agreement' : ActorMethod<[string], [] | [Agreement]>,
   'get_agreement_balance' : ActorMethod<[string], bigint>,
   'get_canister_principal' : ActorMethod<[], Principal>,
-  'get_ledger_canister_id' : ActorMethod<[], Principal>,
-  'get_mainnet_ledger_id' : ActorMethod<[], Principal>,
   'get_milestone_voting_status' : ActorMethod<[string, bigint], Result_1>,
   'get_my_agreements' : ActorMethod<[], Array<Agreement>>,
   'list_events' : ActorMethod<[], Array<Event>>,
   'set_ledger_canister_id' : ActorMethod<[Principal], Result>,
   'sign_document' : ActorMethod<[string, string], Result>,
-  'use_mainnet_ledger' : ActorMethod<[], Result>,
   'vote_milestone' : ActorMethod<[string, bigint, boolean], Result>,
 }
 export declare const idlFactory: IDL.InterfaceFactory;

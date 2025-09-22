@@ -2,39 +2,7 @@ use candid::{CandidType, Deserialize, Principal};
 use ic_cdk::api::time;
 use ic_cdk::{caller, export_candid, init, post_upgrade, pre_upgrade, query, update};
 use serde::Serialize;
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-
-// ===== CONSTANTS =====
-const _MAX_EVENTS: u64 = 10000;
-const _MAX_AGREEMENT_ID_LENGTH: usize = 256;
-const _MAX_TITLE_LENGTH: usize = 256;
-const _MAX_DESCRIPTION_LENGTH: usize = 1024;
-
-const MAINNET_LEDGER_CANISTER_ID: &str = "ryjl3-tyaaa-aaaaa-aaaba-cai";
-
-// Security constants
-const _MAX_MEMO_SIZE: usize = 32;
-const _MAX_AGREEMENT_SIZE: usize = 1000;
-const MAX_MILESTONES_PER_AGREEMENT: usize = 100;
-
-thread_local! {
-    static REENTRANCY_GUARD: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
-}
-
-macro_rules! defer {
-    ($cleanup:expr) => {
-        struct DeferGuard<F: FnOnce()>(Option<F>);
-        impl<F: FnOnce()> Drop for DeferGuard<F> {
-            fn drop(&mut self) {
-                if let Some(f) = self.0.take() {
-                    f();
-                }
-            }
-        }
-        let _guard = DeferGuard(Some(|| $cleanup));
-    };
-}
 
 // ===== TYPE DEFINITIONS =====
 
@@ -73,7 +41,6 @@ pub struct Milestone {
     pub votes: HashMap<Principal, bool>,
     pub created_at: u64,
     pub completed_at: Option<u64>,
-    pub executed_at: Option<u64>,
 }
 
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
@@ -309,18 +276,6 @@ fn create_agreement(
         return Err("Agreement ID and title cannot be empty".to_string());
     }
 
-    if id.len() > 256 {
-        return Err("Agreement ID too long (max 256 characters)".to_string());
-    }
-
-    if title.len() > 256 {
-        return Err("Title too long (max 256 characters)".to_string());
-    }
-
-    if description.len() > 1024 {
-        return Err("Description too long (max 1024 characters)".to_string());
-    }
-
     if voting_threshold < 50 || voting_threshold > 100 {
         return Err("Voting threshold must be between 50-100%".to_string());
     }
@@ -329,32 +284,12 @@ fn create_agreement(
         return Err("Agreement must have at least one milestone".to_string());
     }
 
-    if milestones.len() > MAX_MILESTONES_PER_AGREEMENT {
-        return Err(format!(
-            "Too many milestones (max {})",
-            MAX_MILESTONES_PER_AGREEMENT
-        ));
-    }
-
-    if participants.len() > 50 {
-        return Err("Too many participants (max 50)".to_string());
-    }
-
+    // Validate milestone IDs are unique
     let mut milestone_ids = HashSet::new();
-    let mut total_milestone_amount = 0u128;
-
     for milestone in &milestones {
         if !milestone_ids.insert(milestone.id) {
             return Err(format!("Duplicate milestone ID: {}", milestone.id));
         }
-
-        if milestone.amount == 0 {
-            return Err("Milestone amounts must be greater than zero".to_string());
-        }
-
-        total_milestone_amount = total_milestone_amount
-            .checked_add(milestone.amount)
-            .ok_or("Total milestone amount overflow")?;
     }
 
     STATE.with(|state| {
@@ -366,37 +301,17 @@ fn create_agreement(
 
         let mut participant_set = HashSet::new();
         for p in participants {
-            if p == Principal::anonymous() {
-                return Err("Anonymous principal cannot be a participant".to_string());
-            }
             participant_set.insert(p);
         }
-
-        let creator = caller();
-        if creator == Principal::anonymous() {
-            return Err("Anonymous caller cannot create agreements".to_string());
-        }
-
-        let secure_milestones: Vec<Milestone> = milestones
-            .into_iter()
-            .map(|mut m| {
-                m.executed_at = None;
-                m.created_at = time();
-                m.completed_at = None;
-                m.votes = HashMap::new();
-                m.status = MilestoneStatus::ReadyForVoting;
-                m
-            })
-            .collect();
 
         let agreement = Agreement {
             id: id.clone(),
             title: title.clone(),
             description,
-            creator,
+            creator: caller(),
             participants: participant_set,
             documents,
-            milestones: secure_milestones,
+            milestones,
             voting_threshold,
             status: AgreementStatus::Active,
             created_at: time(),
@@ -409,19 +324,10 @@ fn create_agreement(
             id.clone(),
             None,
             None,
-            format!(
-                "Agreement '{}' created with {} milestones, total value: {}",
-                title,
-                milestone_ids.len(),
-                total_milestone_amount
-            ),
+            format!("Agreement '{}' created", title),
         );
 
-        Ok(format!(
-            "Agreement '{}' created successfully with {} milestones",
-            title,
-            milestone_ids.len()
-        ))
+        Ok(format!("Agreement '{}' created successfully", title))
     })
 }
 
@@ -435,6 +341,7 @@ fn add_participant(agreement_id: String, participant: Principal) -> Result<Strin
             .get_mut(&agreement_id)
             .ok_or("Agreement not found")?;
 
+        // Only creator or admin can add participants
         if caller() != agreement.creator && caller() != admin {
             return Err("Only agreement creator or admin can add participants".to_string());
         }
@@ -520,49 +427,21 @@ fn sign_document(agreement_id: String, doc_id: String) -> Result<String, String>
 
 #[update]
 fn fund_agreement(agreement_id: String, amount: u128) -> Result<String, String> {
-    let caller = caller();
-
     if amount == 0 {
         return Err("Amount must be greater than zero".to_string());
     }
 
-    if amount > u128::MAX / 2 {
-        return Err("Amount too large".to_string());
-    }
-
-    REENTRANCY_GUARD.with(|guard| {
-        let mut guard = guard.borrow_mut();
-        let key = format!("fund_{}", agreement_id);
-        if guard.contains(&key) {
-            return Err("Funding operation already in progress".to_string());
-        }
-        guard.insert(key.clone());
-        Ok(())
-    })?;
-
-    defer! {
-        REENTRANCY_GUARD.with(|g| {
-            let key = format!("fund_{}", agreement_id);
-            g.borrow_mut().remove(&key);
-        })
-    };
-
     STATE.with(|state| {
         let mut state = state.borrow_mut();
 
-        let agreement = state
-            .agreements
-            .get(&agreement_id)
-            .ok_or("Agreement not found")?;
-
-        if agreement.creator != caller && !agreement.participants.contains(&caller) {
+        if !is_participant(&agreement_id, caller()) {
             return Err("Only agreement participants can fund this agreement".to_string());
         }
 
         let current_balance = *state.agreement_balances.get(&agreement_id).unwrap_or(&0);
         let new_balance = current_balance
             .checked_add(amount)
-            .ok_or("Balance overflow - funding amount too large")?;
+            .ok_or("Balance overflow")?;
 
         state
             .agreement_balances
@@ -573,7 +452,7 @@ fn fund_agreement(agreement_id: String, amount: u128) -> Result<String, String> 
             agreement_id.clone(),
             None,
             None,
-            format!("Funded with {} tokens by {}", amount, caller),
+            format!("Funded with {} tokens", amount),
         );
 
         Ok(format!(
@@ -589,24 +468,9 @@ fn vote_milestone(
     milestone_id: u64,
     approve: bool,
 ) -> Result<String, String> {
-    let caller = caller();
-
-    REENTRANCY_GUARD.with(|guard| {
-        let mut guard = guard.borrow_mut();
-        let key = format!("vote_{}_{}_{}", agreement_id, milestone_id, caller);
-        if guard.contains(&key) {
-            return Err("Vote operation already in progress".to_string());
-        }
-        guard.insert(key.clone());
-        Ok(())
-    })?;
-
-    defer! {
-        REENTRANCY_GUARD.with(|g| {
-            let key = format!("vote_{}_{}_{}", agreement_id, milestone_id, caller);
-            g.borrow_mut().remove(&key);
-        })
-    };
+    if !is_participant(&agreement_id, caller()) {
+        return Err("Only agreement participants can vote".to_string());
+    }
 
     STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -614,10 +478,6 @@ fn vote_milestone(
             .agreements
             .get_mut(&agreement_id)
             .ok_or("Agreement not found")?;
-
-        if agreement.creator != caller && !agreement.participants.contains(&caller) {
-            return Err("Only agreement participants can vote".to_string());
-        }
 
         let milestone = agreement
             .milestones
@@ -632,93 +492,55 @@ fn vote_milestone(
             return Err("Milestone is not ready for voting".to_string());
         }
 
-        if milestone.votes.contains_key(&caller) {
-            return Err("You have already voted on this milestone".to_string());
-        }
-
-        milestone.votes.insert(caller, approve);
+        milestone.votes.insert(caller(), approve);
         milestone.status = MilestoneStatus::VotingActive;
 
         let total_participants = agreement.participants.len() + 1;
         let approval_votes = milestone.votes.values().filter(|&&v| v).count();
-        let rejection_votes = milestone.votes.values().filter(|&&v| !v).count();
-        let required_votes =
-            ((total_participants * agreement.voting_threshold as usize) + 99) / 100;
+        let required_votes = (total_participants * agreement.voting_threshold as usize + 99) / 100;
 
         let vote_result = if approval_votes >= required_votes {
             milestone.status = MilestoneStatus::Approved;
             "Milestone approved by DAO vote"
-        } else if rejection_votes > total_participants - required_votes {
-            milestone.status = MilestoneStatus::Rejected;
-            "Milestone rejected by DAO vote"
         } else {
-            "Vote recorded, waiting for more votes"
+            let rejection_votes = milestone.votes.values().filter(|&&v| !v).count();
+            if rejection_votes > total_participants - required_votes {
+                milestone.status = MilestoneStatus::Rejected;
+                "Milestone rejected by DAO vote"
+            } else {
+                "Vote recorded, waiting for more votes"
+            }
         };
 
         add_event(
             "vote_milestone".to_string(),
-            agreement_id.clone(),
+            agreement_id,
             Some(milestone_id),
             None,
             format!(
-                "Voted {} on milestone {} by {}",
+                "Voted {} on milestone {}",
                 if approve { "approve" } else { "reject" },
-                milestone_id,
-                caller
+                milestone_id
             ),
         );
 
-        Ok(format!(
-            "{} ({} approve, {} reject, {} required)",
-            vote_result, approval_votes, rejection_votes, required_votes
-        ))
+        Ok(vote_result.to_string())
     })
 }
 
 #[update]
 async fn execute_milestone(agreement_id: String, milestone_id: u64) -> Result<String, String> {
-    let caller = caller();
-
-    REENTRANCY_GUARD.with(|guard| {
-        let mut guard = guard.borrow_mut();
-        let key = format!("execute_{}_{}", agreement_id, milestone_id);
-        if guard.contains(&key) {
-            return Err("Operation already in progress".to_string());
-        }
-        guard.insert(key.clone());
-        Ok(())
-    })?;
-
-    defer! {
-        REENTRANCY_GUARD.with(|g| {
-            let key = format!("execute_{}_{}", agreement_id, milestone_id);
-            g.borrow_mut().remove(&key);
-        })
-    };
-
     let (milestone_amount, recipient, current_balance, milestone_title) = STATE.with(|state| {
         let state = state.borrow();
 
-        let agreement = state
+        let milestone = state
             .agreements
             .get(&agreement_id)
-            .ok_or("Agreement not found")?;
-
-        let caller_authorized =
-            agreement.creator == caller || agreement.participants.contains(&caller);
-        if !caller_authorized {
-            return Err("Only agreement participants can execute milestones".to_string());
-        }
-
-        let milestone = agreement
+            .ok_or("Agreement not found")?
             .milestones
             .iter()
             .find(|m| m.id == milestone_id)
             .ok_or("Milestone not found")?;
-
-        if milestone.executed_at.is_some() {
-            return Err("Milestone already executed".to_string());
-        }
 
         if !matches!(milestone.status, MilestoneStatus::Approved) {
             return Err("Milestone is not approved for execution".to_string());
@@ -740,14 +562,6 @@ async fn execute_milestone(agreement_id: String, milestone_id: u64) -> Result<St
             milestone.title.clone(),
         ))
     })?;
-
-    STATE.with(|state| {
-        let mut state = state.borrow_mut();
-        let new_balance = current_balance - milestone_amount;
-        state
-            .agreement_balances
-            .insert(agreement_id.clone(), new_balance);
-    });
 
     let to_account = ICRC1Account {
         owner: recipient,
@@ -772,12 +586,16 @@ async fn execute_milestone(agreement_id: String, milestone_id: u64) -> Result<St
                     .unwrap();
                 milestone.status = MilestoneStatus::Executed;
                 milestone.completed_at = Some(time());
-                milestone.executed_at = Some(time());
+
+                let new_balance = current_balance - milestone_amount;
+                state
+                    .agreement_balances
+                    .insert(agreement_id.clone(), new_balance);
             });
 
             add_event(
                 "execute_milestone".to_string(),
-                agreement_id.clone(),
+                agreement_id,
                 Some(milestone_id),
                 None,
                 format!(
@@ -793,16 +611,7 @@ async fn execute_milestone(agreement_id: String, milestone_id: u64) -> Result<St
                 current_balance - milestone_amount
             ))
         }
-        Err(err) => {
-            STATE.with(|state| {
-                let mut state = state.borrow_mut();
-                state
-                    .agreement_balances
-                    .insert(agreement_id.clone(), current_balance);
-            });
-
-            Err(format!("Transfer failed: {:?}", err))
-        }
+        Err(err) => Err(format!("Transfer failed: {:?}", err)),
     }
 }
 
@@ -899,35 +708,6 @@ fn get_canister_principal() -> Principal {
 
 // ===== ADMIN FUNCTIONS =====
 
-#[query]
-fn get_mainnet_ledger_id() -> Principal {
-    Principal::from_text(MAINNET_LEDGER_CANISTER_ID).expect("Invalid mainnet ledger canister ID")
-}
-
-#[query]
-fn get_ledger_canister_id() -> Principal {
-    STATE.with(|state| state.borrow().ledger_canister_id)
-}
-
-#[update]
-fn use_mainnet_ledger() -> Result<String, String> {
-    let mainnet_ledger = Principal::from_text(MAINNET_LEDGER_CANISTER_ID)
-        .map_err(|_| "Invalid mainnet ledger canister ID".to_string())?;
-
-    STATE.with(|state| {
-        let admin = state.borrow().admin;
-        if caller() != admin {
-            return Err("Only admin can set ledger canister ID".to_string());
-        }
-
-        state.borrow_mut().ledger_canister_id = mainnet_ledger;
-        Ok(format!(
-            "Ledger canister ID set to mainnet: {}",
-            MAINNET_LEDGER_CANISTER_ID
-        ))
-    })
-}
-
 #[update]
 fn set_ledger_canister_id(canister_id: Principal) -> Result<String, String> {
     STATE.with(|state| {
@@ -948,25 +728,14 @@ fn init(ledger_canister_id: Principal) {
     STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.admin = caller();
-
-        if ledger_canister_id == Principal::anonymous() {
-            let mainnet_ledger = Principal::from_text(MAINNET_LEDGER_CANISTER_ID)
-                .expect("Invalid mainnet ledger canister ID");
-            state.ledger_canister_id = mainnet_ledger;
-            ic_cdk::println!(
-                "Agreement Orchestrator initialized with admin: {} and default mainnet ledger: {}",
-                caller(),
-                MAINNET_LEDGER_CANISTER_ID
-            );
-        } else {
-            state.ledger_canister_id = ledger_canister_id;
-            ic_cdk::println!(
-                "Agreement Orchestrator initialized with admin: {} and custom ledger: {}",
-                caller(),
-                ledger_canister_id
-            );
-        }
+        state.ledger_canister_id = ledger_canister_id;
     });
+
+    ic_cdk::println!(
+        "Agreement Orchestrator initialized with admin: {} and ledger: {}",
+        caller(),
+        ledger_canister_id
+    );
 }
 
 #[pre_upgrade]

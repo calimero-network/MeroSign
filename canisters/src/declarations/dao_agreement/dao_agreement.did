@@ -32,7 +32,6 @@ type Milestone = record {
   status : MilestoneStatus;
   title : text;
   milestone_type : MilestoneType;
-  executed_at : opt nat64;
   votes : vec record { principal; bool };
   recipient : principal;
   description : text;
@@ -85,13 +84,10 @@ service : (principal) -> {
   get_agreement : (text) -> (opt Agreement) query;
   get_agreement_balance : (text) -> (nat) query;
   get_canister_principal : () -> (principal) query;
-  get_ledger_canister_id : () -> (principal) query;
-  get_mainnet_ledger_id : () -> (principal) query;
   get_milestone_voting_status : (text, nat64) -> (Result_1) query;
   get_my_agreements : () -> (vec Agreement) query;
   list_events : () -> (vec Event) query;
   set_ledger_canister_id : (principal) -> (Result);
   sign_document : (text, text) -> (Result);
-  use_mainnet_ledger : () -> (Result);
   vote_milestone : (text, nat64, bool) -> (Result);
 }
