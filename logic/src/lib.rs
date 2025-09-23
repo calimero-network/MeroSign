@@ -466,28 +466,12 @@ impl MeroDocsState {
         Ok(signatures)
     }
 
-    /// Join a shared context with identity mapping
+    /// Join a default shared context with identity mapping
     pub fn join_shared_context(
         &mut self,
         context_id: String,
         shared_identity: UserId,
         context_name: String,
-    ) -> Result<(), String> {
-        self.join_shared_context_with_type(
-            context_id,
-            shared_identity,
-            context_name,
-            ContextType::Default,
-        )
-    }
-
-    /// Join a shared context with identity mapping and context type
-    pub fn join_shared_context_with_type(
-        &mut self,
-        context_id: String,
-        shared_identity: UserId,
-        context_name: String,
-        context_type: ContextType,
     ) -> Result<(), String> {
         if !self.is_private {
             return Err("Context joining can only be managed in private context".to_string());
@@ -502,7 +486,7 @@ impl MeroDocsState {
         let metadata = ContextMetadata {
             context_id: context_id.clone(),
             context_name: context_name.clone(),
-            context_type: context_type.clone(),
+            context_type: ContextType::Default,
             role: ParticipantRole::Unknown,
             joined_at: env::time_now(),
             private_identity,
@@ -518,7 +502,56 @@ impl MeroDocsState {
 
         self.joined_contexts
             .insert(context_id.clone(), metadata)
-            .map_err(|e| format!("Failed to join context: {:?}", e))?;
+            .map_err(|e| format!("Failed to join default context: {:?}", e))?;
+
+        self.identity_mappings
+            .insert(context_id.clone(), identity_mapping)
+            .map_err(|e| format!("Failed to store identity mapping: {:?}", e))?;
+
+        app::emit!(MeroDocsEvent::ContextJoined {
+            context_id,
+            context_name
+        });
+        Ok(())
+    }
+
+    /// Join a DAO agreement context with identity mapping
+    pub fn join_dao_agreement_context(
+        &mut self,
+        context_id: String,
+        shared_identity: UserId,
+        context_name: String,
+    ) -> Result<(), String> {
+        if !self.is_private {
+            return Err("Context joining can only be managed in private context".to_string());
+        }
+
+        if self.joined_contexts.contains(&context_id).unwrap_or(false) {
+            return Err("Already joined this context".to_string());
+        }
+
+        let private_identity = self.owner;
+
+        let metadata = ContextMetadata {
+            context_id: context_id.clone(),
+            context_name: context_name.clone(),
+            context_type: ContextType::DaoAgreement,
+            role: ParticipantRole::Unknown,
+            joined_at: env::time_now(),
+            private_identity,
+            shared_identity,
+        };
+
+        let identity_mapping = IdentityMapping {
+            private_identity,
+            shared_identity,
+            context_id: context_id.clone(),
+            created_at: env::time_now(),
+        };
+
+        self.joined_contexts
+            .insert(context_id.clone(), metadata)
+            .map_err(|e| format!("Failed to join DAO agreement context: {:?}", e))?;
 
         self.identity_mappings
             .insert(context_id.clone(), identity_mapping)
