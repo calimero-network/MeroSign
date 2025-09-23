@@ -22,6 +22,8 @@ import { AgreementService } from '../../api/agreementService';
 import { ContextApiDataSource } from '../../api/dataSource/nodeApiDataSource';
 import { ClientApiDataSource } from '../../api/dataSource/ClientApiDataSource';
 import { Agreement } from '../../api/clientApi';
+import CreateAgreementTypeModal from './components/CreateAgreementTypeModal';
+import DaoCreateModal from './components/DaoCreateModal';
 
 type NotificationType = 'success' | 'error';
 interface NotificationState {
@@ -32,7 +34,7 @@ interface NotificationState {
 const NotificationPopup: React.FC<{
   notification: NotificationState;
 }> = ({ notification }) => (
-  <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+  <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[10000] p-4">
     <motion.div
       initial={{ opacity: 0, scale: 0.8 }}
       animate={{ opacity: 1, scale: 1 }}
@@ -63,6 +65,8 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
+  const [showAgreementTypeModal, setShowAgreementTypeModal] = useState(false);
+  const [showDaoCreateModal, setShowDaoCreateModal] = useState(false);
   const [agreementName, setAgreementName] = useState('');
   const [invitationPayload, setInvitationPayload] = useState('');
   const [contextName, setContextName] = useState('');
@@ -78,6 +82,32 @@ export default function Dashboard() {
     null,
   );
 
+  const [daoStep, setDaoStep] = useState(1);
+  const [daoAgreementName, setDaoAgreementName] = useState('');
+  const [daoParticipants, setDaoParticipants] = useState<any[]>([]);
+  const [currentParticipant, setCurrentParticipant] = useState({
+    contextId: '',
+    invitationPayload: '',
+    icpId: '',
+  });
+  const [milestoneType, setMilestoneType] = useState('');
+  const [milestoneDescription, setMilestoneDescription] = useState('');
+  const [uploadedDocuments, setUploadedDocuments] = useState<File[]>([]);
+  const [totalFunding, setTotalFunding] = useState('');
+  const [milestones, setMilestones] = useState<any[]>([]);
+  const [currentMilestone, setCurrentMilestone] = useState({
+    id: 0,
+    title: '',
+    description: '',
+    amount: '',
+    recipients: [],
+    type: 'manual',
+  });
+  const [daoAgreementCreated, setDaoAgreementCreated] = useState(false);
+  const [daoContextId, setDaoContextId] = useState('');
+  const [generatingInvitationPayload, setGeneratingInvitationPayload] =
+    useState(false);
+
   const agreementService = useMemo(() => new AgreementService(app), [app]);
   const nodeApiService = useMemo(() => new ContextApiDataSource(app), [app]);
   const clientApiService = useMemo(() => new ClientApiDataSource(app), [app]);
@@ -87,7 +117,7 @@ export default function Dashboard() {
       setNotification({ message, type });
       setTimeout(() => {
         setNotification(null);
-      }, 1500);
+      }, 2000);
     },
     [],
   );
@@ -186,6 +216,323 @@ export default function Dashboard() {
     }
   };
 
+  const handleAgreementTypeSelection = (type: 'default' | 'dao') => {
+    setShowAgreementTypeModal(false);
+    if (type === 'default') {
+      setShowCreateModal(true);
+    } else {
+      setShowDaoCreateModal(true);
+    }
+  };
+
+  const generateInvitationPayload = useCallback(
+    async (contextId: string, invitee: string) => {
+      try {
+        setGeneratingInvitationPayload(true);
+        setError(null);
+
+        if (!daoContextId) {
+          setError(
+            'DAO context not created yet. Please complete step 1 first.',
+          );
+          return;
+        }
+
+        const agreementContextUserID = localStorage.getItem(
+          'tempDaoContextUserID',
+        );
+
+        if (!agreementContextUserID) {
+          setError('User ID not found. Please ensure you are logged in.');
+          return;
+        }
+
+        const response = await nodeApiService.inviteToContext({
+          contextId: daoContextId, // Use the DAO context ID instead of the passed contextId
+          invitee: invitee.trim(),
+          inviter: agreementContextUserID, // Use the current user as inviter
+        });
+
+        if (response.error) {
+          console.error('Generate invitation payload error:', response.error);
+          setError(
+            response.error.message || 'Failed to generate invitation payload',
+          );
+          return;
+        }
+
+        if (!response.data) {
+          setError('No invitation payload data received');
+          return;
+        }
+
+        const invitationPayload = response.data;
+        if (!invitationPayload) {
+          setError('Invalid invitation payload response');
+          return;
+        }
+
+        setCurrentParticipant((prev) => ({
+          ...prev,
+          invitationPayload: invitationPayload,
+        }));
+
+        showNotification(
+          'Invitation payload generated successfully!',
+          'success',
+        );
+      } catch (err) {
+        console.error('Failed to generate invitation payload:', err);
+        const errorMessage =
+          err instanceof Error
+            ? err.message
+            : 'Failed to generate invitation payload';
+        setError(errorMessage);
+      } finally {
+        setGeneratingInvitationPayload(false);
+      }
+    },
+    [
+      nodeApiService,
+      showNotification,
+      setCurrentParticipant,
+      setError,
+      setGeneratingInvitationPayload,
+      daoContextId,
+    ],
+  );
+
+  const copyInvitationPayload = async (payload: string) => {
+    try {
+      await navigator.clipboard.writeText(payload);
+      showNotification('Invitation payload copied to clipboard!', 'success');
+    } catch (err) {
+      console.error('Failed to copy invitation payload:', err);
+      showNotification('Failed to copy invitation payload', 'error');
+    }
+  };
+
+  const addCurrentParticipant = () => {
+    if (currentParticipant.contextId && currentParticipant.icpId) {
+      setDaoParticipants((prev) => [...prev, { ...currentParticipant }]);
+      setCurrentParticipant({
+        contextId: '',
+        invitationPayload: '',
+        icpId: '',
+      });
+    }
+  };
+
+  const removeParticipant = (index: number) => {
+    setDaoParticipants((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleNextStep = async () => {
+    if (daoStep === 1 && !daoAgreementCreated) {
+      try {
+        setCreating(true);
+        setError(null);
+
+        if (!daoAgreementName.trim()) {
+          setError('Please enter an agreement name');
+          return;
+        }
+
+        const createResponse =
+          await agreementService.createDaoAgreementContext(daoAgreementName);
+
+        if (createResponse.error) {
+          throw new Error(createResponse.error.message);
+        }
+
+        if (createResponse.data) {
+          const agreement = createResponse.data;
+          const contextId = agreement.contextId;
+          const userId = agreement.memberPublicKey;
+
+          localStorage.setItem('tempDaoContextID', contextId);
+          localStorage.setItem('tempDaoContextUserID', userId);
+          localStorage.setItem('tempDaoAgreementName', daoAgreementName);
+
+          setDaoContextId(contextId);
+          setDaoAgreementCreated(true);
+
+          showNotification(
+            'DAO agreement context created successfully!',
+            'success',
+          );
+
+          setTimeout(async () => {
+            await loadAgreements();
+          }, 500);
+        }
+
+        setDaoStep(2);
+      } catch (err) {
+        console.error('Failed to create DAO context:', err);
+        const errorMessage =
+          err instanceof Error
+            ? err.message
+            : 'Failed to create DAO agreement context';
+        setError(errorMessage);
+      } finally {
+        setCreating(false);
+      }
+    } else {
+      setDaoStep((prev) => prev + 1);
+    }
+  };
+
+  const handlePrevStep = () => {
+    setDaoStep((prev) => prev - 1);
+  };
+
+  const handleFileUpload = async (files: FileList | null) => {
+    if (files) {
+      const newFiles = Array.from(files);
+
+      setUploadedDocuments((prev) => [...prev, ...newFiles]);
+    }
+  };
+
+  const removeDocument = (index: number) => {
+    setUploadedDocuments((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const canProceedToNextStep = () => {
+    switch (daoStep) {
+      case 1:
+        return daoAgreementName.trim() !== '';
+      case 2:
+        return daoParticipants.length >= 0; // Participants are optional, creator is included by default
+      case 3:
+        return true; // Documents are optional
+      case 4:
+        return totalFunding.trim() !== '' && parseFloat(totalFunding) > 0;
+      case 5:
+        const totalMilestoneAmount = milestones.reduce(
+          (sum, m) => sum + parseFloat(m.amount || '0'),
+          0,
+        );
+        const funding = parseFloat(totalFunding || '0');
+        return milestones.length > 0 && totalMilestoneAmount <= funding;
+      case 6:
+        return true;
+      default:
+        return false;
+    }
+  };
+
+  const handleCreateDaoAgreement = async () => {
+    try {
+      setCreating(true);
+      setError(null);
+
+      if (!daoAgreementName.trim()) {
+        setError('Agreement name is required');
+        return;
+      }
+
+      if (!totalFunding || parseFloat(totalFunding) <= 0) {
+        setError('Valid total funding amount is required');
+        return;
+      }
+
+      if (milestones.length === 0) {
+        setError('At least one milestone is required');
+        return;
+      }
+
+      const participantIds = daoParticipants
+        .map((p) => p.icpId)
+        .filter((id) => id); // Filter out empty IDs
+
+      const createResponse = await agreementService.createCompleteDaoAgreement(
+        daoAgreementName,
+        participantIds,
+        milestones,
+        parseFloat(totalFunding), // Pass as number, service will handle conversion
+        75, // Default voting threshold of 75%
+        uploadedDocuments, // Pass uploaded documents
+      );
+
+      if (createResponse.error) {
+        throw new Error(createResponse.error.message);
+      }
+
+      const { agreement } = createResponse.data!;
+
+      localStorage.setItem('agreementContextID', agreement.contextId);
+      localStorage.setItem('agreementContextUserID', agreement.memberPublicKey);
+
+      localStorage.removeItem('tempDaoContextID');
+      localStorage.removeItem('tempDaoContextUserID');
+      localStorage.removeItem('tempDaoAgreementName');
+
+      showNotification('DAO Agreement created successfully!', 'success');
+      setShowDaoCreateModal(false);
+      resetDaoForm();
+
+      setTimeout(async () => {
+        await loadAgreements();
+      }, 1000);
+    } catch (err) {
+      console.error('Failed to create DAO agreement:', err);
+      const errorMessage =
+        err instanceof Error ? err.message : 'Failed to create DAO agreement';
+      setError(errorMessage);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const resetDaoForm = () => {
+    setDaoStep(1);
+    setDaoAgreementName('');
+    setDaoParticipants([]);
+    setCurrentParticipant({ contextId: '', invitationPayload: '', icpId: '' });
+    setUploadedDocuments([]);
+    setTotalFunding('');
+    setMilestones([]);
+    setCurrentMilestone({
+      id: 0,
+      title: '',
+      description: '',
+      amount: '',
+      recipients: [],
+      type: 'manual',
+    });
+    setDaoAgreementCreated(false);
+    setDaoContextId('');
+    setError(null);
+
+    localStorage.removeItem('tempDaoContextID');
+    localStorage.removeItem('tempDaoContextUserID');
+    localStorage.removeItem('tempDaoAgreementName');
+  };
+
+  const addMilestone = () => {
+    if (currentMilestone.title && currentMilestone.amount) {
+      const newMilestone = {
+        ...currentMilestone,
+        id: Date.now(),
+      };
+      setMilestones((prev) => [...prev, newMilestone]);
+      setCurrentMilestone({
+        id: 0,
+        title: '',
+        description: '',
+        amount: '',
+        recipients: [],
+        type: 'manual',
+      });
+    }
+  };
+
+  const removeMilestone = (id: number) => {
+    setMilestones((prev) => prev.filter((m) => m.id !== id));
+  };
+
   const handleJoinAgreement = async () => {
     if (!invitationPayload.trim()) {
       setError('Please enter a valid invitation payload');
@@ -278,7 +625,6 @@ export default function Dashboard() {
       setGeneratingIdentity(true);
       setError(null);
 
-      // Create new identity
       const identityResponse = await apiClient.node().createNewIdentity();
 
       if (identityResponse.error) {
@@ -289,7 +635,6 @@ export default function Dashboard() {
       }
 
       if (identityResponse.data) {
-        // Extract the public key or ID from the NodeIdentity object
         const identity = identityResponse.data as any;
         const identityId =
           identity.publicKey || identity.id || JSON.stringify(identity);
@@ -306,10 +651,15 @@ export default function Dashboard() {
     }
   };
 
-  const handleCopyIdentity = () => {
+  const handleCopyIdentity = async () => {
     if (generatedIdentity) {
-      navigator.clipboard.writeText(generatedIdentity);
-      showNotification('Identity copied to clipboard!', 'success');
+      try {
+        await navigator.clipboard.writeText(generatedIdentity);
+        showNotification('Identity copied to clipboard!', 'success');
+      } catch (err) {
+        console.error('Failed to copy identity:', err);
+        showNotification('Failed to copy identity', 'error');
+      }
     }
   };
 
@@ -346,7 +696,7 @@ export default function Dashboard() {
           <div className="flex flex-col sm:flex-row items-stretch gap-3 sm:gap-4">
             <div className="flex gap-2 w-full sm:w-auto flex-shrink-0">
               <Button
-                onClick={() => setShowCreateModal(true)}
+                onClick={() => setShowAgreementTypeModal(true)}
                 className="group dark:text-black h-[52px] px-4 w-full sm:w-auto flex-1 sm:flex-none min-w-0"
                 size="sm"
               >
@@ -755,6 +1105,59 @@ export default function Dashboard() {
           </motion.div>
         </div>
       )}
+
+      {/* Agreement Type Selection Modal */}
+      <CreateAgreementTypeModal
+        showModal={showAgreementTypeModal}
+        setShowModal={setShowAgreementTypeModal}
+        onSelectType={handleAgreementTypeSelection}
+        mode={mode}
+      />
+
+      {/* DAO Create Modal */}
+      <DaoCreateModal
+        showDaoCreateModal={showDaoCreateModal}
+        setShowDaoCreateModal={setShowDaoCreateModal}
+        daoStep={daoStep}
+        setDaoStep={setDaoStep}
+        daoAgreementName={daoAgreementName}
+        setDaoAgreementName={setDaoAgreementName}
+        daoParticipants={daoParticipants}
+        setDaoParticipants={setDaoParticipants}
+        currentParticipant={currentParticipant}
+        setCurrentParticipant={setCurrentParticipant}
+        milestoneType={milestoneType}
+        setMilestoneType={setMilestoneType}
+        milestoneDescription={milestoneDescription}
+        setMilestoneDescription={setMilestoneDescription}
+        uploadedDocuments={uploadedDocuments}
+        setUploadedDocuments={setUploadedDocuments}
+        totalFunding={totalFunding}
+        setTotalFunding={setTotalFunding}
+        milestones={milestones}
+        setMilestones={setMilestones}
+        currentMilestone={currentMilestone}
+        setCurrentMilestone={setCurrentMilestone}
+        mode={mode}
+        error={error}
+        creating={creating}
+        daoAgreementCreated={daoAgreementCreated}
+        daoContextId={daoContextId}
+        generatingInvitationPayload={generatingInvitationPayload}
+        generateInvitationPayload={generateInvitationPayload}
+        copyInvitationPayload={copyInvitationPayload}
+        addCurrentParticipant={addCurrentParticipant}
+        removeParticipant={removeParticipant}
+        handleNextStep={handleNextStep}
+        handlePrevStep={handlePrevStep}
+        handleFileUpload={handleFileUpload}
+        removeDocument={removeDocument}
+        canProceedToNextStep={canProceedToNextStep}
+        handleCreateDaoAgreement={handleCreateDaoAgreement}
+        resetDaoForm={resetDaoForm}
+        addMilestone={addMilestone}
+        removeMilestone={removeMilestone}
+      />
     </MobileLayout>
   );
 }
