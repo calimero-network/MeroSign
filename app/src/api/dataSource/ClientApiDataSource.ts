@@ -950,9 +950,10 @@ export class ClientApiDataSource implements ClientApi {
     fileSize: number,
     embeddings?: number[],
     extractedText?: string,
+    chunks?: any[],
     agreementContextID?: string,
     agreementContextUserID?: string,
-  ): Promise<any> {
+  ): ApiResponse<any> {
     try {
       const authConfig =
         agreementContextID && agreementContextUserID
@@ -971,8 +972,9 @@ export class ClientApiDataSource implements ClientApi {
           hash,
           pdf_blob_id_str: pdfBlobIdStr,
           file_size: fileSize,
-          embeddings, // Include embeddings (optional)
-          extracted_text: extractedText, // Include extracted text (optional)
+          embeddings,
+          extracted_text: extractedText,
+          chunks,
         },
       } as RpcQueryParams<any>);
 
@@ -1259,9 +1261,19 @@ export class ClientApiDataSource implements ClientApi {
     }
   }
 
-  async initializeDaoContext(contextId: string): ApiResponse<void> {
+  async initializeDaoContext(
+    contextId: string,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<void> {
     try {
-      const authConfig = getAuthConfig();
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
 
       const response = await rpcClient.execute({
         ...authConfig,
@@ -1306,7 +1318,7 @@ export class ClientApiDataSource implements ClientApi {
     participants: string[],
     milestones: any[],
     votingThreshold: number,
-    totalFunding: string,
+    totalFunding: number,
     agreementContextID?: string,
     agreementContextUserID?: string,
   ): ApiResponse<string> {
@@ -1415,7 +1427,7 @@ export class ClientApiDataSource implements ClientApi {
 
   async fundDaoAgreement(
     agreementId: string,
-    amount: string,
+    amount: number,
     agreementContextID?: string,
     agreementContextUserID?: string,
   ): ApiResponse<string> {
@@ -1825,11 +1837,10 @@ export class ClientApiDataSource implements ClientApi {
     }
   }
 
-  async joinSharedContextWithType(
+  async joinDaoAgreementContext(
     contextId: string,
     sharedIdentity: string,
     name: string,
-    contextType: string,
   ): Promise<any> {
     try {
       if (!sharedIdentity) {
@@ -1852,12 +1863,11 @@ export class ClientApiDataSource implements ClientApi {
 
         const result = await this.app.execute(
           defaultContext,
-          ClientMethod.JOIN_SHARED_CONTEXT_WITH_TYPE,
+          ClientMethod.JOIN_DAO_AGREEMENT_CONTEXT,
           {
             context_id: contextId,
             shared_identity: sharedIdentity,
             context_name: name,
-            context_type: contextType,
           },
         );
 
@@ -1868,12 +1878,11 @@ export class ClientApiDataSource implements ClientApi {
       } else {
         const response = await rpcClient.execute({
           ...getAuthConfig(),
-          method: ClientMethod.JOIN_SHARED_CONTEXT_WITH_TYPE,
+          method: ClientMethod.JOIN_DAO_AGREEMENT_CONTEXT,
           argsJson: {
             context_id: contextId,
             shared_identity: sharedIdentity,
             context_name: name,
-            context_type: contextType,
           },
         } as RpcQueryParams<any>);
 
@@ -1884,7 +1893,7 @@ export class ClientApiDataSource implements ClientApi {
       }
     } catch (error: any) {
       console.error(
-        'ClientApiDataSource: Error in joinSharedContextWithType:',
+        'ClientApiDataSource: Error in joinDaoAgreementContext:',
         error,
       );
       return {

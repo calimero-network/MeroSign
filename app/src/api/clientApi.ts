@@ -34,7 +34,7 @@ export enum ClientMethod {
   GET_MILESTONE_DETAILS = 'get_milestone_details',
   GET_MILESTONE_VOTING_STATUS = 'get_milestone_voting_status',
   GET_CONTEXT_TYPE = 'get_context_type',
-  JOIN_SHARED_CONTEXT_WITH_TYPE = 'join_shared_context_with_type',
+  JOIN_DAO_AGREEMENT_CONTEXT = 'join_dao_agreement_context',
 }
 
 export interface SignatureRecord {
@@ -207,11 +207,10 @@ export interface ClientApi {
     sharedIdentity: UserId,
     name: string,
   ): ApiResponse<void>;
-  joinSharedContextWithType(
+  joinDaoAgreementContext(
     contextId: string,
     sharedIdentity: UserId,
     name: string,
-    contextType: ContextType,
   ): ApiResponse<void>;
   listJoinedContexts(): ApiResponse<ContextMetadata[]>;
   leaveSharedContext(contextId: string): ApiResponse<void>;
@@ -281,14 +280,18 @@ export interface ClientApi {
     agreementContextUserID?: string,
   ): ApiResponse<string>;
 
-  initializeDaoContext(contextId: string): ApiResponse<void>;
+  initializeDaoContext(
+    contextId: string,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<void>;
   createDaoAgreement(
     agreementId: string,
     title: string,
     participants: UserId[],
     milestones: DaoMilestone[],
     votingThreshold: number,
-    totalFunding: string,
+    totalFunding: number,
     agreementContextID?: string,
     agreementContextUserID?: string,
   ): ApiResponse<string>;
@@ -300,7 +303,7 @@ export interface ClientApi {
   ): ApiResponse<void>;
   fundDaoAgreement(
     agreementId: string,
-    amount: string,
+    amount: number,
     agreementContextID?: string,
     agreementContextUserID?: string,
   ): ApiResponse<string>;
