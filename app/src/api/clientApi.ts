@@ -23,6 +23,18 @@ export enum ClientMethod {
   HAS_CONSENTED = 'has_consented',
   IS_DEFAULT_PRIVATE_CONTEXT = 'is_default_private_context',
   SEARCH_DOCUMENT_BY_EMBEDDING = 'search_document_by_embedding',
+  INITIALIZE_DAO_CONTEXT = 'initialize_dao_context',
+  CREATE_DAO_AGREEMENT = 'create_dao_agreement',
+  ADD_MILESTONE_TO_AGREEMENT = 'add_milestone_to_agreement',
+  FUND_DAO_AGREEMENT = 'fund_dao_agreement',
+  VOTE_ON_MILESTONE = 'vote_on_milestone',
+  EXECUTE_MILESTONE = 'execute_milestone',
+  GET_DAO_AGREEMENT = 'get_dao_agreement',
+  LIST_DAO_AGREEMENTS = 'list_dao_agreements',
+  GET_MILESTONE_DETAILS = 'get_milestone_details',
+  GET_MILESTONE_VOTING_STATUS = 'get_milestone_voting_status',
+  GET_CONTEXT_TYPE = 'get_context_type',
+  JOIN_SHARED_CONTEXT_WITH_TYPE = 'join_shared_context_with_type',
 }
 
 export interface SignatureRecord {
@@ -44,10 +56,75 @@ export interface SavedSignature {
 export interface ContextMetadata {
   context_id: string;
   context_name: string;
+  context_type: ContextType;
   role: string;
   joined_at: number;
   private_identity: UserId;
   shared_identity: UserId;
+}
+
+export enum ContextType {
+  Default = 'Default',
+  DaoAgreement = 'DaoAgreement',
+}
+
+export enum MilestoneType {
+  DocumentSignature = 'DocumentSignature',
+  ManualApproval = 'ManualApproval',
+  TimeRelease = 'TimeRelease',
+  MultiCondition = 'MultiCondition',
+}
+
+export enum MilestoneStatus {
+  Pending = 'Pending',
+  ReadyForVoting = 'ReadyForVoting',
+  VotingActive = 'VotingActive',
+  Approved = 'Approved',
+  Executed = 'Executed',
+  Rejected = 'Rejected',
+}
+
+export enum AgreementStatus {
+  Active = 'Active',
+  Completed = 'Completed',
+  Cancelled = 'Cancelled',
+}
+
+export interface DaoMilestone {
+  id: number;
+  title: string;
+  description: string;
+  milestone_type: MilestoneType;
+  recipient: UserId;
+  amount: string;
+  status: MilestoneStatus;
+  votes: Record<string, boolean>;
+  created_at: number;
+  completed_at?: number;
+}
+
+export interface DaoAgreement {
+  id: string;
+  title: string;
+  description: string;
+  creator: UserId;
+  participants: string[];
+  milestones: DaoMilestone[];
+  voting_threshold: number;
+  status: AgreementStatus;
+  created_at: number;
+  total_funding: string; // Use string for large numbers
+  remaining_balance: string; // Use string for large numbers
+}
+
+export interface MilestoneVotingInfo {
+  milestone_id: number;
+  status: MilestoneStatus;
+  approval_votes: number;
+  rejection_votes: number;
+  total_participants: number;
+  required_votes: number;
+  voting_threshold: number;
 }
 
 export enum DocumentStatus {
@@ -87,8 +164,8 @@ export interface DocumentInfo {
   status: DocumentStatus;
   pdf_blob_id: string;
   size: number;
-  embeddings?: number[]; // New: Vector embeddings from frontend
-  extracted_text?: string; // New: Extracted text from PDF
+  embeddings?: number[];
+  extracted_text?: string;
 }
 
 export interface Document {
@@ -129,6 +206,12 @@ export interface ClientApi {
     contextId: string,
     sharedIdentity: UserId,
     name: string,
+  ): ApiResponse<void>;
+  joinSharedContextWithType(
+    contextId: string,
+    sharedIdentity: UserId,
+    name: string,
+    contextType: ContextType,
   ): ApiResponse<void>;
   listJoinedContexts(): ApiResponse<ContextMetadata[]>;
   leaveSharedContext(contextId: string): ApiResponse<void>;
@@ -194,6 +277,68 @@ export interface ClientApi {
   searchDocumentByEmbedding(
     queryEmbedding: number[],
     documentId: string,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<string>;
+
+  initializeDaoContext(contextId: string): ApiResponse<void>;
+  createDaoAgreement(
+    agreementId: string,
+    title: string,
+    participants: UserId[],
+    milestones: DaoMilestone[],
+    votingThreshold: number,
+    totalFunding: string,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<string>;
+  addMilestoneToAgreement(
+    agreementId: string,
+    milestone: DaoMilestone,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<void>;
+  fundDaoAgreement(
+    agreementId: string,
+    amount: string,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<string>;
+  voteOnMilestone(
+    agreementId: string,
+    milestoneId: number,
+    approve: boolean,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<string>;
+  executeMilestone(
+    agreementId: string,
+    milestoneId: number,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<string>;
+  getDaoAgreement(
+    agreementId: string,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<DaoAgreement>;
+  listDaoAgreements(
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<DaoAgreement[]>;
+  getMilestoneDetails(
+    agreementId: string,
+    milestoneId: number,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<DaoMilestone>;
+  getMilestoneVotingStatus(
+    agreementId: string,
+    milestoneId: number,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<MilestoneVotingInfo>;
+  getContextType(
     agreementContextID?: string,
     agreementContextUserID?: string,
   ): ApiResponse<string>;
