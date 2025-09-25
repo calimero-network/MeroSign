@@ -227,7 +227,7 @@ export class AgreementService {
               file.name,
               file,
               contextId,
-              userId, 
+              userId,
               (progress) => {
                 console.log(`Upload progress for ${file.name}: ${progress}%`);
               },
@@ -343,7 +343,6 @@ export class AgreementService {
             contextType: context.context_type || 'Default',
           };
         }
-
 
         return {
           id: context.context_id,

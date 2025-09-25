@@ -21,7 +21,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { AgreementService } from '../../api/agreementService';
 import { ContextApiDataSource } from '../../api/dataSource/nodeApiDataSource';
 import { ClientApiDataSource } from '../../api/dataSource/ClientApiDataSource';
-import { Agreement } from '../../api/clientApi';
+import { Agreement, PermissionLevel } from '../../api/clientApi';
 import CreateAgreementTypeModal from './components/CreateAgreementTypeModal';
 import DaoCreateModal from './components/DaoCreateModal';
 
@@ -33,7 +33,8 @@ interface NotificationState {
 
 const NotificationPopup: React.FC<{
   notification: NotificationState;
-}> = ({ notification }) => (
+  mode: string;
+}> = ({ notification, mode }) => (
   <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[10000] p-4">
     <motion.div
       initial={{ opacity: 0, scale: 0.8 }}
@@ -42,8 +43,12 @@ const NotificationPopup: React.FC<{
       transition={{ type: 'spring', stiffness: 300, damping: 25 }}
       className={`relative p-8 rounded-2xl shadow-2xl border w-full max-w-sm text-center ${
         notification.type === 'success'
-          ? 'bg-green-100 border-green-300 text-green-900 dark:bg-gray-800 dark:border-green-600 dark:text-green-200'
-          : 'bg-red-100 border-red-300 text-red-900 dark:bg-gray-800 dark:border-red-600 dark:text-red-200'
+          ? mode === 'dark'
+            ? 'bg-gray-800 border-green-600 text-green-200'
+            : 'bg-green-100 border-green-300 text-green-900'
+          : mode === 'dark'
+            ? 'bg-gray-800 border-red-600 text-red-200'
+            : 'bg-red-100 border-red-300 text-red-900'
       }`}
     >
       <div className="flex flex-col items-center justify-center">
@@ -81,6 +86,7 @@ export default function Dashboard() {
   const [notification, setNotification] = useState<NotificationState | null>(
     null,
   );
+  const [activeTab, setActiveTab] = useState<'default' | 'dao'>('default');
 
   const [daoStep, setDaoStep] = useState(1);
   const [daoAgreementName, setDaoAgreementName] = useState('');
@@ -153,11 +159,20 @@ export default function Dashboard() {
 
   const stats = [
     {
-      label: 'Active Agreements',
-      value: agreements.length,
+      label: 'Default Agreements',
+      value: agreements.filter(
+        (a) => a.contextType === 'Default' || !a.contextType,
+      ).length,
       icon: Layers,
       color: 'text-blue-600',
-      bg: 'bg-blue-100 dark:bg-blue-900/20',
+      bg: mode === 'dark' ? 'bg-blue-900/20' : 'bg-blue-100',
+    },
+    {
+      label: 'DAO Agreements',
+      value: agreements.filter((a) => a.contextType === 'DaoAgreement').length,
+      icon: Layers,
+      color: 'text-purple-600',
+      bg: mode === 'dark' ? 'bg-purple-900/20' : 'bg-purple-100',
     },
   ];
 
@@ -165,10 +180,17 @@ export default function Dashboard() {
     if (!agreement.name) {
       return false;
     }
+
     const matchesSearch = agreement.name
       .toLowerCase()
       .includes(searchQuery.toLowerCase());
-    return matchesSearch;
+
+    const matchesTab =
+      activeTab === 'default'
+        ? agreement.contextType === 'Default' || !agreement.contextType
+        : agreement.contextType === 'DaoAgreement';
+
+    return matchesSearch && matchesTab;
   });
 
   const containerVariants = {
@@ -248,9 +270,9 @@ export default function Dashboard() {
         }
 
         const response = await nodeApiService.inviteToContext({
-          contextId: daoContextId, // Use the DAO context ID instead of the passed contextId
+          contextId: daoContextId,
           invitee: invitee.trim(),
-          inviter: agreementContextUserID, // Use the current user as inviter
+          inviter: agreementContextUserID,
         });
 
         if (response.error) {
@@ -404,9 +426,9 @@ export default function Dashboard() {
       case 1:
         return daoAgreementName.trim() !== '';
       case 2:
-        return daoParticipants.length >= 0; // Participants are optional, creator is included by default
+        return daoParticipants.length >= 0;
       case 3:
-        return true; // Documents are optional
+        return uploadedDocuments.length > 0;
       case 4:
         return totalFunding.trim() !== '' && parseFloat(totalFunding) > 0;
       case 5:
@@ -445,19 +467,73 @@ export default function Dashboard() {
 
       const participantIds = daoParticipants
         .map((p) => p.icpId)
-        .filter((id) => id); // Filter out empty IDs
+        .filter((id) => id);
+
+      const tempContextId = localStorage.getItem('tempDaoContextID');
+      const tempUserId = localStorage.getItem('tempDaoContextUserID');
+
+      if (!tempContextId || !tempUserId) {
+        setError(
+          'DAO context information not found. Please restart the DAO creation process.',
+        );
+        return;
+      }
 
       const createResponse = await agreementService.createCompleteDaoAgreement(
         daoAgreementName,
         participantIds,
         milestones,
-        parseFloat(totalFunding), // Pass as number, service will handle conversion
-        75, // Default voting threshold of 75%
-        uploadedDocuments, // Pass uploaded documents
+        parseFloat(totalFunding),
+        tempContextId,
+        tempUserId,
+        75,
+        uploadedDocuments,
       );
 
       if (createResponse.error) {
         throw new Error(createResponse.error.message);
+      }
+
+      if (daoParticipants.length > 0) {
+        for (const participant of daoParticipants) {
+          if (
+            participant.contextId &&
+            participant.icpId &&
+            participant.icpId !== tempUserId
+          ) {
+            try {
+              const addParticipantResponse =
+                await clientApiService.addParticipant(
+                  tempContextId,
+                  participant.contextId,
+                  PermissionLevel.Sign,
+                  participant.icpId,
+                  tempContextId,
+                  tempUserId,
+                );
+
+              if (addParticipantResponse.error) {
+                console.error(
+                  'Failed to add participant:',
+                  participant.icpId,
+                  addParticipantResponse.error,
+                );
+              }
+            } catch (participantError) {
+              console.error(
+                'Error adding participant:',
+                participant.icpId,
+                participantError,
+              );
+              // Continue with other participants even if one fails
+            }
+          }
+        }
+
+        showNotification(
+          'Participants added to DAO context successfully!',
+          'success',
+        );
       }
 
       const { agreement } = createResponse.data!;
@@ -673,7 +749,9 @@ export default function Dashboard() {
   return (
     <MobileLayout>
       <AnimatePresence>
-        {notification && <NotificationPopup notification={notification} />}
+        {notification && (
+          <NotificationPopup notification={notification} mode={mode} />
+        )}
       </AnimatePresence>
       <motion.div
         variants={containerVariants}
@@ -697,7 +775,7 @@ export default function Dashboard() {
             <div className="flex gap-2 w-full sm:w-auto flex-shrink-0">
               <Button
                 onClick={() => setShowAgreementTypeModal(true)}
-                className="group dark:text-black h-[52px] px-4 w-full sm:w-auto flex-1 sm:flex-none min-w-0"
+                className={`group ${mode === 'dark' ? 'text-white' : 'text-black'} h-[52px] px-4 w-full sm:w-auto flex-1 sm:flex-none min-w-0`}
                 size="sm"
               >
                 <Plus className="w-4 h-4 mr-2" />
@@ -715,31 +793,33 @@ export default function Dashboard() {
             </div>
 
             <div className="flex-1">
-              {stats.map((stat, index) => {
-                const Icon = stat.icon;
-                return (
-                  <Card
-                    key={index}
-                    className="p-3 hover:shadow-lg transition-all duration-300 w-full h-[52px]"
-                  >
-                    <div className="flex items-center gap-3 h-full">
-                      <div
-                        className={`p-2 rounded-full ${stat.bg} flex-shrink-0`}
-                      >
-                        <Icon className={`w-4 h-4 ${stat.color}`} />
-                      </div>
-                      <div className="flex min-w-0 gap-2 justify-between items-center">
-                        <div className="text-lg sm:text-xl font-bold text-foreground">
-                          {stat.value}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {stats.map((stat, index) => {
+                  const Icon = stat.icon;
+                  return (
+                    <Card
+                      key={index}
+                      className="p-3 hover:shadow-lg transition-all duration-300 w-full h-[52px]"
+                    >
+                      <div className="flex items-center gap-3 h-full">
+                        <div
+                          className={`p-2 rounded-full ${stat.bg} flex-shrink-0`}
+                        >
+                          <Icon className={`w-4 h-4 ${stat.color}`} />
                         </div>
-                        <div className="text-s text-muted-foreground truncate">
-                          {stat.label}
+                        <div className="flex min-w-0 gap-2 justify-between items-center">
+                          <div className="text-lg sm:text-xl font-bold text-foreground">
+                            {stat.value}
+                          </div>
+                          <div className="text-s text-muted-foreground truncate">
+                            {stat.label}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </Card>
-                );
-              })}
+                    </Card>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </motion.section>
@@ -766,6 +846,41 @@ export default function Dashboard() {
             </h2>
           </div>
 
+          {/* Tab Navigation */}
+          <div className="flex border-b border-border mb-6">
+            <button
+              onClick={() => setActiveTab('default')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'default'
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+              }`}
+            >
+              Default Agreements (
+              {
+                agreements.filter(
+                  (a) => a.contextType === 'Default' || !a.contextType,
+                ).length
+              }
+              )
+            </button>
+            <button
+              onClick={() => setActiveTab('dao')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'dao'
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+              }`}
+            >
+              DAO Agreements (
+              {
+                agreements.filter((a) => a.contextType === 'DaoAgreement')
+                  .length
+              }
+              )
+            </button>
+          </div>
+
           {loading && (
             <div className="text-center py-8">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
@@ -788,11 +903,14 @@ export default function Dashboard() {
             <div className="text-center py-8">
               <FileText className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-lg font-semibold text-foreground mb-2">
-                No agreements found
+                {activeTab === 'default'
+                  ? 'No default agreements found'
+                  : 'No DAO agreements found'}
               </h3>
               <p className="text-muted-foreground mb-4">
-                Create your first agreement to get started with document
-                management.
+                {activeTab === 'default'
+                  ? 'Create your first agreement to get started with document management.'
+                  : 'Create your first DAO agreement to get started with decentralized governance.'}
               </p>
             </div>
           )}
@@ -813,9 +931,26 @@ export default function Dashboard() {
                       {/* Header */}
                       <div className="flex items-start justify-between mb-3 sm:mb-4">
                         <div className="flex-1">
-                          <h3 className="font-semibold text-sm sm:text-base text-foreground mb-1 group-hover:text-primary transition-colors duration-300 line-clamp-1">
-                            {context.name}
-                          </h3>
+                          <div className="flex items-center gap-2 mb-1">
+                            <h3 className="font-semibold text-sm sm:text-base text-foreground group-hover:text-primary transition-colors duration-300 line-clamp-1">
+                              {context.name}
+                            </h3>
+                            <span
+                              className={`px-2 py-1 text-xs font-medium rounded-full ${
+                                context.contextType === 'DaoAgreement'
+                                  ? mode === 'dark'
+                                    ? 'bg-purple-900/30 text-purple-300'
+                                    : 'bg-purple-100 text-purple-700'
+                                  : mode === 'dark'
+                                    ? 'bg-blue-900/30 text-blue-300'
+                                    : 'bg-blue-100 text-blue-700'
+                              }`}
+                            >
+                              {context.contextType === 'DaoAgreement'
+                                ? 'DAO'
+                                : 'Default'}
+                            </span>
+                          </div>
                           <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed line-clamp-2">
                             Context ID: {context.contextId.slice(0, 6)}...
                             {context.contextId.slice(-4)}
@@ -914,7 +1049,7 @@ export default function Dashboard() {
                 </Button>
                 <Button
                   onClick={handleCreateAgreement}
-                  className="flex-1 dark:text-black"
+                  className={`flex-1 ${mode === 'dark' ? 'text-white' : 'text-black'}`}
                   disabled={!agreementName.trim() || creating}
                 >
                   {creating ? 'Creating...' : 'Create'}
@@ -1083,7 +1218,7 @@ export default function Dashboard() {
                 </Button>
                 <Button
                   onClick={handleJoinAgreement}
-                  className="flex-1 dark:text-black"
+                  className={`flex-1 ${mode === 'dark' ? 'text-white' : 'text-black'}`}
                   disabled={
                     !invitationPayload.trim() || !contextName.trim() || joining
                   }

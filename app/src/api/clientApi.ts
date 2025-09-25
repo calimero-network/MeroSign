@@ -191,6 +191,7 @@ export interface Agreement {
   joinedAt: number;
   privateIdentity: UserId;
   sharedIdentity: UserId;
+  contextType?: 'Default' | 'DaoAgreement';
 }
 
 export interface ClientApi {
