@@ -82,8 +82,6 @@ export class AgreementService {
       const contextProps: CreateContextProps = {
         is_private: false,
         context_name: name,
-        agreement_type: 'DaoAgreement',
-        description: `DAO Agreement: ${name}`,
       } as any;
 
       const contextResponse = await this.contextApi.createContext(contextProps);
@@ -96,30 +94,6 @@ export class AgreementService {
       }
 
       const contextData = contextResponse.data as CreateContextResponse;
-      const contextId = contextData.contextId;
-      const userId = contextData.memberPublicKey || contextData.executorId;
-
-      const initResponse = await this.clientApi.initializeDaoContext(
-        contextId,
-        contextId,
-        userId,
-      );
-      if (initResponse.error) {
-        throw new Error(
-          `Failed to initialize DAO context: ${initResponse.error.message}`,
-        );
-      }
-
-      const joinResponse = await this.clientApi.joinDaoAgreementContext(
-        contextId,
-        userId,
-        name,
-      );
-      if (joinResponse.error) {
-        throw new Error(
-          `Failed to join DAO context: ${joinResponse.error.message}`,
-        );
-      }
 
       const agreement: Agreement = {
         id: contextData.contextId,
@@ -160,23 +134,44 @@ export class AgreementService {
     participants: string[],
     milestones: any[],
     totalFunding: number,
+    contextId: string,
+    userId: string,
     votingThreshold: number = 75,
     uploadedDocuments: File[] = [],
   ): ApiResponse<{ agreement: Agreement; agreementId: string }> {
     try {
-      const contextResponse =
-        await this.createDaoAgreementContext(agreementName);
-
-      if (contextResponse.error) {
-        return {
-          data: null,
-          error: contextResponse.error,
-        };
+      const initResponse = await this.clientApi.initializeDaoContext(
+        contextId,
+        contextId,
+        userId,
+      );
+      if (initResponse.error) {
+        throw new Error(
+          `Failed to initialize DAO context: ${initResponse.error.message}`,
+        );
       }
 
-      const agreement = contextResponse.data!;
-      const contextId = agreement.contextId;
-      const userId = agreement.memberPublicKey;
+      const joinResponse = await this.clientApi.joinDaoAgreementContext(
+        contextId,
+        userId,
+        agreementName,
+      );
+      if (joinResponse.error) {
+        throw new Error(
+          `Failed to join DAO context: ${joinResponse.error.message}`,
+        );
+      }
+
+      const agreement: Agreement = {
+        id: contextId,
+        name: agreementName,
+        contextId: contextId,
+        memberPublicKey: userId,
+        role: 'Owner',
+        joinedAt: Date.now(),
+        privateIdentity: userId,
+        sharedIdentity: userId,
+      };
 
       const formattedMilestones = milestones.map((milestone, index) => ({
         id: index + 1,
@@ -220,7 +215,6 @@ export class AgreementService {
         throw new Error(createResponse.error.message);
       }
 
-      // Step 5: Upload documents if any
       if (uploadedDocuments.length > 0) {
         const uploadErrors: string[] = [];
 
@@ -232,8 +226,8 @@ export class AgreementService {
               contextId,
               file.name,
               file,
-              contextId, // agreementContextID
-              userId, // agreementContextUserID
+              contextId,
+              userId, 
               (progress) => {
                 console.log(`Upload progress for ${file.name}: ${progress}%`);
               },
@@ -346,10 +340,11 @@ export class AgreementService {
             joinedAt: context.joinedAt || ' ',
             privateIdentity: context.executorId,
             sharedIdentity: context.executorId,
+            contextType: context.context_type || 'Default',
           };
         }
 
-        // Handle old API structure (fallback)
+
         return {
           id: context.context_id,
           name: context.context_name,
@@ -359,6 +354,7 @@ export class AgreementService {
           joinedAt: context.joined_at,
           privateIdentity: context.private_identity,
           sharedIdentity: context.shared_identity,
+          contextType: context.context_type || 'Default',
         };
       });
 
