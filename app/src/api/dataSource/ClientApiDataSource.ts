@@ -950,10 +950,10 @@ export class ClientApiDataSource implements ClientApi {
     fileSize: number,
     embeddings?: number[],
     extractedText?: string,
-    chunks?: any[], // Add chunks parameter
+    chunks?: any[],
     agreementContextID?: string,
     agreementContextUserID?: string,
-  ): Promise<any> {
+  ): ApiResponse<any> {
     try {
       const authConfig =
         agreementContextID && agreementContextUserID
@@ -972,9 +972,9 @@ export class ClientApiDataSource implements ClientApi {
           hash,
           pdf_blob_id_str: pdfBlobIdStr,
           file_size: fileSize,
-          embeddings, 
-          extracted_text: extractedText, 
-          chunks, 
+          embeddings,
+          extracted_text: extractedText,
+          chunks,
         },
       } as RpcQueryParams<any>);
 
@@ -1257,6 +1257,647 @@ export class ClientApiDataSource implements ClientApi {
           code: error.code || 500,
           message: getErrorMessage(error),
         },
+      };
+    }
+  }
+
+  async initializeDaoContext(
+    contextId: string,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<void> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.INITIALIZE_DAO_CONTEXT,
+        argsJson: {
+          context_id: contextId,
+        },
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      return {
+        data: undefined,
+        error: null,
+      };
+    } catch (error: any) {
+      console.error(
+        'ClientApiDataSource: Error in initializeDaoContext:',
+        error,
+      );
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async createDaoAgreement(
+    agreementId: string,
+    title: string,
+    participants: string[],
+    milestones: any[],
+    votingThreshold: number,
+    totalFunding: number,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<string> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.CREATE_DAO_AGREEMENT,
+        argsJson: {
+          agreement_id: agreementId,
+          title: title,
+          participants: participants,
+          milestones: milestones,
+          voting_threshold: votingThreshold,
+          total_funding: totalFunding,
+        },
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      const data = response.result?.output || response.result;
+
+      return {
+        data: data as string,
+        error: null,
+      };
+    } catch (error: any) {
+      console.error('ClientApiDataSource: Error in createDaoAgreement:', error);
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async addMilestoneToAgreement(
+    agreementId: string,
+    milestone: any,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<void> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.ADD_MILESTONE_TO_AGREEMENT,
+        argsJson: {
+          agreement_id: agreementId,
+          milestone: milestone,
+        },
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      return {
+        data: undefined,
+        error: null,
+      };
+    } catch (error: any) {
+      console.error(
+        'ClientApiDataSource: Error in addMilestoneToAgreement:',
+        error,
+      );
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async fundDaoAgreement(
+    agreementId: string,
+    amount: number,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<string> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.FUND_DAO_AGREEMENT,
+        argsJson: {
+          agreement_id: agreementId,
+          amount: amount,
+        },
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      const data = response.result?.output || response.result;
+
+      return {
+        data: data as string,
+        error: null,
+      };
+    } catch (error: any) {
+      console.error('ClientApiDataSource: Error in fundDaoAgreement:', error);
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async voteOnMilestone(
+    agreementId: string,
+    milestoneId: number,
+    approve: boolean,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<string> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.VOTE_ON_MILESTONE,
+        argsJson: {
+          agreement_id: agreementId,
+          milestone_id: milestoneId,
+          approve: approve,
+        },
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      const data = response.result?.output || response.result;
+
+      return {
+        data: data as string,
+        error: null,
+      };
+    } catch (error: any) {
+      console.error('ClientApiDataSource: Error in voteOnMilestone:', error);
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async executeMilestone(
+    agreementId: string,
+    milestoneId: number,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<string> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.EXECUTE_MILESTONE,
+        argsJson: {
+          agreement_id: agreementId,
+          milestone_id: milestoneId,
+        },
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      const data = response.result?.output || response.result;
+
+      return {
+        data: data as string,
+        error: null,
+      };
+    } catch (error: any) {
+      console.error('ClientApiDataSource: Error in executeMilestone:', error);
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async getDaoAgreement(
+    agreementId: string,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<any> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.GET_DAO_AGREEMENT,
+        argsJson: {
+          agreement_id: agreementId,
+        },
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      const data = response.result?.output || response.result;
+
+      return {
+        data: data,
+        error: null,
+      };
+    } catch (error: any) {
+      console.error('ClientApiDataSource: Error in getDaoAgreement:', error);
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async listDaoAgreements(
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<any[]> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.LIST_DAO_AGREEMENTS,
+        argsJson: {},
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      const data = response.result?.output || response.result;
+
+      return {
+        data: Array.isArray(data) ? data : [],
+        error: null,
+      };
+    } catch (error: any) {
+      console.error('ClientApiDataSource: Error in listDaoAgreements:', error);
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async getMilestoneDetails(
+    agreementId: string,
+    milestoneId: number,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<any> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.GET_MILESTONE_DETAILS,
+        argsJson: {
+          agreement_id: agreementId,
+          milestone_id: milestoneId,
+        },
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      const data = response.result?.output || response.result;
+
+      return {
+        data: data,
+        error: null,
+      };
+    } catch (error: any) {
+      console.error(
+        'ClientApiDataSource: Error in getMilestoneDetails:',
+        error,
+      );
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async getMilestoneVotingStatus(
+    agreementId: string,
+    milestoneId: number,
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<any> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.GET_MILESTONE_VOTING_STATUS,
+        argsJson: {
+          agreement_id: agreementId,
+          milestone_id: milestoneId,
+        },
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      const data = response.result?.output || response.result;
+
+      return {
+        data: data,
+        error: null,
+      };
+    } catch (error: any) {
+      console.error(
+        'ClientApiDataSource: Error in getMilestoneVotingStatus:',
+        error,
+      );
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async getContextType(
+    agreementContextID?: string,
+    agreementContextUserID?: string,
+  ): ApiResponse<string> {
+    try {
+      const authConfig =
+        agreementContextID && agreementContextUserID
+          ? getContextSpecificAuthConfig(
+              agreementContextID,
+              agreementContextUserID,
+            )
+          : getAuthConfig();
+
+      const response = await rpcClient.execute({
+        ...authConfig,
+        method: ClientMethod.GET_CONTEXT_TYPE,
+        argsJson: {},
+      } as RpcQueryParams<any>);
+
+      if (response?.error) {
+        return {
+          data: undefined,
+          error: {
+            code: response.error.code ?? 500,
+            message: getErrorMessage(response.error),
+          },
+        };
+      }
+
+      const data = response.result?.output || response.result;
+
+      return {
+        data: data as string,
+        error: null,
+      };
+    } catch (error: any) {
+      console.error('ClientApiDataSource: Error in getContextType:', error);
+      return {
+        data: null,
+        error: {
+          code: error.code || 500,
+          message: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  async joinDaoAgreementContext(
+    contextId: string,
+    sharedIdentity: string,
+    name: string,
+  ): Promise<any> {
+    try {
+      if (!sharedIdentity) {
+        return {
+          error: 'Shared identity is required',
+        };
+      }
+
+      if (this.app) {
+        const defaultContextService = DefaultContextService.getInstance(
+          this.app,
+        );
+        const defaultContext = defaultContextService.getStoredDefaultContext();
+
+        if (!defaultContext) {
+          return {
+            error: 'Default context not found',
+          };
+        }
+
+        const result = await this.app.execute(
+          defaultContext,
+          ClientMethod.JOIN_DAO_AGREEMENT_CONTEXT,
+          {
+            context_id: contextId,
+            shared_identity: sharedIdentity,
+            context_name: name,
+          },
+        );
+
+        return {
+          data: result.data || result,
+          error: result.error || null,
+        };
+      } else {
+        const response = await rpcClient.execute({
+          ...getAuthConfig(),
+          method: ClientMethod.JOIN_DAO_AGREEMENT_CONTEXT,
+          argsJson: {
+            context_id: contextId,
+            shared_identity: sharedIdentity,
+            context_name: name,
+          },
+        } as RpcQueryParams<any>);
+
+        return {
+          data: response.result,
+          error: response.error,
+        };
+      }
+    } catch (error: any) {
+      console.error(
+        'ClientApiDataSource: Error in joinDaoAgreementContext:',
+        error,
+      );
+      return {
+        error: error,
       };
     }
   }

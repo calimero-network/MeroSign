@@ -1,16 +1,19 @@
 import { type ApiResponse } from '@calimero-network/calimero-client';
 import { ContextApiDataSource } from './dataSource/nodeApiDataSource';
 import { ClientApiDataSource } from './dataSource/ClientApiDataSource';
-import { Agreement, ContextMetadata } from './clientApi';
+import { DocumentService } from './documentService';
+import { Agreement } from './clientApi';
 import { CreateContextProps, CreateContextResponse } from './nodeApi';
 
 export class AgreementService {
   private contextApi: ContextApiDataSource;
   private clientApi: ClientApiDataSource;
+  private documentService: DocumentService;
 
   constructor(app?: any) {
     this.contextApi = new ContextApiDataSource(app);
     this.clientApi = new ClientApiDataSource(app);
+    this.documentService = new DocumentService();
   }
 
   async createAgreement(name: string): ApiResponse<Agreement> {
@@ -59,6 +62,219 @@ export class AgreementService {
     } catch (error) {
       console.error('createAgreement failed:', error);
       let errorMessage = 'An unexpected error occurred during createAgreement';
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      }
+      return {
+        data: null,
+        error: {
+          code: 500,
+          message: errorMessage,
+        },
+      };
+    }
+  }
+
+  async createDaoAgreementContext(name: string): ApiResponse<Agreement> {
+    try {
+      const contextProps: CreateContextProps = {
+        is_private: false,
+        context_name: name,
+      } as any;
+
+      const contextResponse = await this.contextApi.createContext(contextProps);
+
+      if (contextResponse.error) {
+        return {
+          data: null,
+          error: contextResponse.error,
+        };
+      }
+
+      const contextData = contextResponse.data as CreateContextResponse;
+
+      const agreement: Agreement = {
+        id: contextData.contextId,
+        name,
+        contextId: contextData.contextId,
+        memberPublicKey: contextData.executorId,
+        role: 'Owner',
+        joinedAt: Date.now(),
+        privateIdentity: contextData.executorId,
+        sharedIdentity: contextData.executorId,
+      };
+
+      return {
+        data: agreement,
+        error: null,
+      };
+    } catch (error) {
+      console.error('createDaoAgreementContext failed:', error);
+      let errorMessage =
+        'An unexpected error occurred during createDaoAgreementContext';
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      }
+      return {
+        data: null,
+        error: {
+          code: 500,
+          message: errorMessage,
+        },
+      };
+    }
+  }
+
+  async createCompleteDaoAgreement(
+    agreementName: string,
+    participants: string[],
+    milestones: any[],
+    totalFunding: number,
+    contextId: string,
+    userId: string,
+    votingThreshold: number = 75,
+    uploadedDocuments: File[] = [],
+  ): ApiResponse<{ agreement: Agreement; agreementId: string }> {
+    try {
+      const initResponse = await this.clientApi.initializeDaoContext(
+        contextId,
+        contextId,
+        userId,
+      );
+      if (initResponse.error) {
+        throw new Error(
+          `Failed to initialize DAO context: ${initResponse.error.message}`,
+        );
+      }
+
+      const joinResponse = await this.clientApi.joinDaoAgreementContext(
+        contextId,
+        userId,
+        agreementName,
+      );
+      if (joinResponse.error) {
+        throw new Error(
+          `Failed to join DAO context: ${joinResponse.error.message}`,
+        );
+      }
+
+      const agreement: Agreement = {
+        id: contextId,
+        name: agreementName,
+        contextId: contextId,
+        memberPublicKey: userId,
+        role: 'Owner',
+        joinedAt: Date.now(),
+        privateIdentity: userId,
+        sharedIdentity: userId,
+      };
+
+      const formattedMilestones = milestones.map((milestone, index) => ({
+        id: index + 1,
+        title: milestone.title,
+        description: milestone.description || '',
+        milestone_type:
+          milestone.type === 'manual'
+            ? 'ManualApproval'
+            : milestone.type === 'document'
+              ? 'DocumentSignature'
+              : milestone.type === 'time'
+                ? 'TimeRelease'
+                : 'ManualApproval',
+        recipient: milestone.recipients?.[0] || userId,
+        amount: parseFloat(milestone.amount) * 1000000,
+        status: 'Pending',
+        votes: {},
+        created_at: Date.now() * 1000000,
+        completed_at: null,
+      }));
+
+      const participantIds = [
+        userId,
+        ...participants.filter((id) => id !== userId),
+      ];
+
+      const agreementId = `dao_${contextId}_${Date.now()}`;
+
+      const createResponse = await this.clientApi.createDaoAgreement(
+        agreementId,
+        agreementName,
+        participantIds,
+        formattedMilestones,
+        votingThreshold,
+        totalFunding * 1000000,
+        contextId,
+        userId,
+      );
+
+      if (createResponse.error) {
+        throw new Error(createResponse.error.message);
+      }
+
+      if (uploadedDocuments.length > 0) {
+        const uploadErrors: string[] = [];
+
+        for (const file of uploadedDocuments) {
+          try {
+            console.log(`Uploading document ${file.name} to DAO context...`);
+
+            const uploadResponse = await this.documentService.uploadDocument(
+              contextId,
+              file.name,
+              file,
+              contextId,
+              userId,
+              (progress) => {
+                console.log(`Upload progress for ${file.name}: ${progress}%`);
+              },
+              (embeddingProgress) => {
+                console.log(
+                  `Embedding progress for ${file.name}: ${embeddingProgress}%`,
+                );
+              },
+              () => {
+                console.log(`Starting storage for ${file.name}`);
+              },
+            );
+
+            if (uploadResponse.error) {
+              const errorMsg = `Failed to upload document ${file.name}: ${uploadResponse.error.message || 'Unknown error'}`;
+              console.error(errorMsg);
+              uploadErrors.push(errorMsg);
+            } else {
+              console.log(
+                `Document ${file.name} uploaded successfully to DAO context with ID: ${uploadResponse.data}`,
+              );
+            }
+          } catch (docError) {
+            const errorMsg = `Failed to upload document ${file.name}: ${docError instanceof Error ? docError.message : 'Unknown error'}`;
+            console.error(errorMsg);
+            uploadErrors.push(errorMsg);
+          }
+        }
+
+        if (uploadErrors.length > 0) {
+          throw new Error(
+            `Document upload failures: ${uploadErrors.join('; ')}`,
+          );
+        }
+      }
+
+      return {
+        data: {
+          agreement,
+          agreementId,
+        },
+        error: null,
+      };
+    } catch (error) {
+      console.error('createCompleteDaoAgreement failed:', error);
+      let errorMessage =
+        'An unexpected error occurred during DAO agreement creation';
       if (error instanceof Error) {
         errorMessage = error.message;
       } else if (typeof error === 'string') {
@@ -124,10 +340,10 @@ export class AgreementService {
             joinedAt: context.joinedAt || ' ',
             privateIdentity: context.executorId,
             sharedIdentity: context.executorId,
+            contextType: context.context_type || 'Default',
           };
         }
 
-        // Handle old API structure (fallback)
         return {
           id: context.context_id,
           name: context.context_name,
@@ -137,6 +353,7 @@ export class AgreementService {
           joinedAt: context.joined_at,
           privateIdentity: context.private_identity,
           sharedIdentity: context.shared_identity,
+          contextType: context.context_type || 'Default',
         };
       });
 

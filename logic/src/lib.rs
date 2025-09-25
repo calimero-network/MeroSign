@@ -60,6 +60,15 @@ pub struct ContextAgreement {
     pub joined_at: u64,
 }
 
+/// Context types for different kinds of shared contexts
+#[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[borsh(crate = "calimero_sdk::borsh")]
+#[serde(crate = "calimero_sdk::serde")]
+pub enum ContextType {
+    Default,
+    DaoAgreement,
+}
+
 /// Participant roles in shared contexts
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 #[borsh(crate = "calimero_sdk::borsh")]
@@ -69,6 +78,83 @@ pub enum ParticipantRole {
     Signer,
     Viewer,
     Unknown,
+}
+
+/// DAO Agreement milestone types
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[borsh(crate = "calimero_sdk::borsh")]
+#[serde(crate = "calimero_sdk::serde")]
+pub enum MilestoneType {
+    /// Automatic - releases when document is signed by all required parties
+    DocumentSignature { required_doc_id: String },
+    /// Manual approval by DAO vote
+    ManualApproval,
+    /// Time-based - releases after specific timestamp
+    TimeRelease { release_time: u64 },
+    /// Multi-condition - requires multiple conditions
+    MultiCondition {
+        required_docs: Vec<String>,
+        requires_vote: bool,
+        min_time: Option<u64>,
+    },
+}
+
+/// DAO Agreement milestone status
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[borsh(crate = "calimero_sdk::borsh")]
+#[serde(crate = "calimero_sdk::serde")]
+pub enum MilestoneStatus {
+    Pending,        // Waiting for conditions
+    ReadyForVoting, // Conditions met, needs DAO vote
+    VotingActive,   // Currently being voted on
+    Approved,       // Approved by DAO, ready for payment
+    Executed,       // Payment completed
+    Rejected,       // DAO rejected the milestone
+}
+
+/// DAO Agreement milestone
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[borsh(crate = "calimero_sdk::borsh")]
+#[serde(crate = "calimero_sdk::serde")]
+pub struct DaoMilestone {
+    pub id: u64,
+    pub title: String,
+    pub description: String,
+    pub milestone_type: MilestoneType,
+    pub recipient: UserId,
+    pub amount: u128,
+    pub status: MilestoneStatus,
+    pub votes: std::collections::HashMap<String, bool>,
+    pub created_at: u64,
+    pub completed_at: Option<u64>,
+}
+
+/// DAO Agreement status
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[borsh(crate = "calimero_sdk::borsh")]
+#[serde(crate = "calimero_sdk::serde")]
+pub enum AgreementStatus {
+    Active,
+    Completed,
+    Cancelled,
+}
+
+/// DAO Agreement information
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[borsh(crate = "calimero_sdk::borsh")]
+#[serde(crate = "calimero_sdk::serde")]
+pub struct DaoAgreement {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub creator: UserId,
+    pub participants: std::collections::HashSet<String>,
+    pub milestones: Vec<DaoMilestone>,
+    pub voting_threshold: u8,
+    pub status: AgreementStatus,
+    pub created_at: u64,
+    pub total_funding: u128,
+    pub remaining_balance: u128,
 }
 
 /// Document chunk with its embedding
@@ -143,7 +229,7 @@ pub struct MeroDocsState {
     // Private context data
     pub signatures: UnorderedMap<String, SignatureRecord>,
     pub joined_contexts: UnorderedMap<String, ContextMetadata>,
-    pub identity_mappings: UnorderedMap<String, IdentityMapping>, // Map context_id -> identity mapping
+    pub identity_mappings: UnorderedMap<String, IdentityMapping>,
     pub signature_count: u64,
 
     // Shared context data
@@ -151,7 +237,11 @@ pub struct MeroDocsState {
     pub documents: UnorderedMap<String, DocumentInfo>,
     pub document_signatures: UnorderedMap<String, Vector<DocumentSignature>>,
     pub permissions: UnorderedMap<String, PermissionLevel>,
-    pub consents: UnorderedMap<String, bool>, // "user_id|document_id" -> consent
+    pub consents: UnorderedMap<String, bool>,
+
+    // DAO Agreement specific data
+    pub dao_agreements: UnorderedMap<String, DaoAgreement>,
+    pub context_type: ContextType,
 }
 
 /// Metadata for tracking joined shared contexts
@@ -161,6 +251,7 @@ pub struct MeroDocsState {
 pub struct ContextMetadata {
     pub context_id: String,
     pub context_name: String,
+    pub context_type: ContextType,
     pub role: ParticipantRole,
     pub joined_at: u64,
     pub private_identity: UserId, // User's private context identity
@@ -269,6 +360,12 @@ impl MeroDocsState {
             document_signatures: UnorderedMap::new(),
             permissions: UnorderedMap::new(),
             consents: UnorderedMap::new(),
+            dao_agreements: UnorderedMap::new(),
+            context_type: if is_private {
+                ContextType::Default
+            } else {
+                ContextType::Default
+            },
         };
 
         // For shared contexts, add the creator as a participant with admin permissions
@@ -369,7 +466,7 @@ impl MeroDocsState {
         Ok(signatures)
     }
 
-    /// Join a shared context with identity mapping
+    /// Join a default shared context with identity mapping
     pub fn join_shared_context(
         &mut self,
         context_id: String,
@@ -389,6 +486,7 @@ impl MeroDocsState {
         let metadata = ContextMetadata {
             context_id: context_id.clone(),
             context_name: context_name.clone(),
+            context_type: ContextType::Default,
             role: ParticipantRole::Unknown,
             joined_at: env::time_now(),
             private_identity,
@@ -404,7 +502,56 @@ impl MeroDocsState {
 
         self.joined_contexts
             .insert(context_id.clone(), metadata)
-            .map_err(|e| format!("Failed to join context: {:?}", e))?;
+            .map_err(|e| format!("Failed to join default context: {:?}", e))?;
+
+        self.identity_mappings
+            .insert(context_id.clone(), identity_mapping)
+            .map_err(|e| format!("Failed to store identity mapping: {:?}", e))?;
+
+        app::emit!(MeroDocsEvent::ContextJoined {
+            context_id,
+            context_name
+        });
+        Ok(())
+    }
+
+    /// Join a DAO agreement context with identity mapping
+    pub fn join_dao_agreement_context(
+        &mut self,
+        context_id: String,
+        shared_identity: UserId,
+        context_name: String,
+    ) -> Result<(), String> {
+        if !self.is_private {
+            return Err("Context joining can only be managed in private context".to_string());
+        }
+
+        if self.joined_contexts.contains(&context_id).unwrap_or(false) {
+            return Err("Already joined this context".to_string());
+        }
+
+        let private_identity = self.owner;
+
+        let metadata = ContextMetadata {
+            context_id: context_id.clone(),
+            context_name: context_name.clone(),
+            context_type: ContextType::DaoAgreement,
+            role: ParticipantRole::Unknown,
+            joined_at: env::time_now(),
+            private_identity,
+            shared_identity,
+        };
+
+        let identity_mapping = IdentityMapping {
+            private_identity,
+            shared_identity,
+            context_id: context_id.clone(),
+            created_at: env::time_now(),
+        };
+
+        self.joined_contexts
+            .insert(context_id.clone(), metadata)
+            .map_err(|e| format!("Failed to join DAO agreement context: {:?}", e))?;
 
         self.identity_mappings
             .insert(context_id.clone(), identity_mapping)
@@ -431,21 +578,6 @@ impl MeroDocsState {
             Ok(None) => Err("Context not found".to_string()),
             Err(e) => Err(format!("Failed to leave context: {:?}", e)),
         }
-    }
-
-    /// List all joined contexts
-    pub fn list_joined_contexts(&self) -> Result<Vec<ContextMetadata>, String> {
-        if !self.is_private {
-            return Err("Joined contexts can only be accessed in private context".to_string());
-        }
-
-        let mut contexts = Vec::new();
-        if let Ok(entries) = self.joined_contexts.entries() {
-            for (_, metadata) in entries {
-                contexts.push(metadata.clone());
-            }
-        }
-        Ok(contexts)
     }
 
     // === SHARED CONTEXT METHODS ===
@@ -1040,7 +1172,7 @@ impl MeroDocsState {
             } else if similarity > 0.2 {
                 250
             } else {
-                150
+                200
             };
 
             if clean_text.len() > max_chars {
@@ -1057,6 +1189,418 @@ impl MeroDocsState {
             document.name, similarity, text_snippet
         ))
     }
+
+    /// Initialize a context as a DAO agreement context
+    pub fn initialize_dao_context(&mut self, context_id: String) -> Result<(), String> {
+        if self.is_private {
+            return Err("DAO context can only be initialized in shared context".to_string());
+        }
+
+        self.context_type = ContextType::DaoAgreement;
+        Ok(())
+    }
+
+    /// Create a new DAO agreement
+    pub fn create_dao_agreement(
+        &mut self,
+        agreement_id: String,
+        title: String,
+        participants: Vec<UserId>,
+        milestones: Vec<DaoMilestone>,
+        voting_threshold: u8,
+        total_funding: u128,
+    ) -> Result<String, String> {
+        if self.context_type != ContextType::DaoAgreement {
+            return Err("This context is not configured for DAO agreements".to_string());
+        }
+
+        if agreement_id.is_empty() || title.is_empty() {
+            return Err("Agreement ID and title cannot be empty".to_string());
+        }
+
+        if voting_threshold < 50 || voting_threshold > 100 {
+            return Err("Voting threshold must be between 50-100%".to_string());
+        }
+
+        if milestones.is_empty() {
+            return Err("Agreement must have at least one milestone".to_string());
+        }
+
+        if total_funding == 0 {
+            return Err("Total funding must be greater than zero".to_string());
+        }
+
+        // Validate milestone IDs are unique
+        let mut milestone_ids = std::collections::HashSet::new();
+        for milestone in &milestones {
+            if !milestone_ids.insert(milestone.id) {
+                return Err(format!("Duplicate milestone ID: {}", milestone.id));
+            }
+        }
+
+        // Validate that milestone amounts don't exceed total funding
+        let total_milestone_amount: u128 = milestones.iter().map(|m| m.amount).sum();
+        if total_milestone_amount > total_funding {
+            return Err(format!(
+                "Total milestone amounts ({}) exceed total funding ({})",
+                total_milestone_amount, total_funding
+            ));
+        }
+
+        if self.dao_agreements.contains(&agreement_id).unwrap_or(false) {
+            return Err("Agreement with this ID already exists".to_string());
+        }
+
+        let mut participant_set = std::collections::HashSet::new();
+        for p in participants {
+            participant_set.insert(format!("{:?}", p));
+        }
+
+        let agreement = DaoAgreement {
+            id: agreement_id.clone(),
+            title: title.clone(),
+            description: String::new(),
+            creator: self.owner,
+            participants: participant_set,
+            milestones,
+            voting_threshold,
+            status: AgreementStatus::Active,
+            created_at: env::time_now(),
+            total_funding,
+            remaining_balance: 0, // Initially no funds are deposited
+        };
+
+        self.dao_agreements
+            .insert(agreement_id.clone(), agreement)
+            .map_err(|e| format!("Failed to create DAO agreement: {:?}", e))?;
+
+        Ok(format!(
+            "DAO Agreement '{}' created successfully with total funding of {} tokens",
+            title, total_funding
+        ))
+    }
+
+    /// Add a milestone to an existing DAO agreement
+    pub fn add_milestone_to_agreement(
+        &mut self,
+        agreement_id: String,
+        milestone: DaoMilestone,
+    ) -> Result<(), String> {
+        if self.context_type != ContextType::DaoAgreement {
+            return Err("This context is not configured for DAO agreements".to_string());
+        }
+
+        let mut agreement = match self.dao_agreements.get(&agreement_id) {
+            Ok(Some(agreement)) => agreement,
+            Ok(None) => return Err("DAO Agreement not found".to_string()),
+            Err(e) => return Err(format!("Failed to get DAO agreement: {:?}", e)),
+        };
+
+        // Check if milestone ID already exists
+        for existing_milestone in &agreement.milestones {
+            if existing_milestone.id == milestone.id {
+                return Err(format!("Milestone with ID {} already exists", milestone.id));
+            }
+        }
+
+        agreement.milestones.push(milestone);
+
+        self.dao_agreements
+            .insert(agreement_id, agreement)
+            .map_err(|e| format!("Failed to add milestone: {:?}", e))?;
+
+        Ok(())
+    }
+
+    /// Fund a DAO agreement
+    pub fn fund_dao_agreement(
+        &mut self,
+        agreement_id: String,
+        amount: u128,
+    ) -> Result<String, String> {
+        if self.context_type != ContextType::DaoAgreement {
+            return Err("This context is not configured for DAO agreements".to_string());
+        }
+
+        if amount == 0 {
+            return Err("Amount must be greater than zero".to_string());
+        }
+
+        let mut agreement = match self.dao_agreements.get(&agreement_id) {
+            Ok(Some(agreement)) => agreement,
+            Ok(None) => return Err("DAO Agreement not found".to_string()),
+            Err(e) => return Err(format!("Failed to get DAO agreement: {:?}", e)),
+        };
+
+        let caller_str = format!("{:?}", self.owner);
+        if agreement.creator != self.owner && !agreement.participants.contains(&caller_str) {
+            return Err("Only agreement participants can fund this agreement".to_string());
+        }
+
+        let new_total = agreement
+            .total_funding
+            .checked_add(amount)
+            .ok_or("Total funding overflow")?;
+
+        let new_balance = agreement
+            .remaining_balance
+            .checked_add(amount)
+            .ok_or("Balance overflow")?;
+
+        agreement.total_funding = new_total;
+        agreement.remaining_balance = new_balance;
+
+        self.dao_agreements
+            .insert(agreement_id.clone(), agreement)
+            .map_err(|e| format!("Failed to fund agreement: {:?}", e))?;
+
+        Ok(format!(
+            "Agreement funded with {} tokens. New balance: {}",
+            amount, new_balance
+        ))
+    }
+
+    /// Vote on a milestone
+    pub fn vote_on_milestone(
+        &mut self,
+        agreement_id: String,
+        milestone_id: u64,
+        approve: bool,
+    ) -> Result<String, String> {
+        if self.context_type != ContextType::DaoAgreement {
+            return Err("This context is not configured for DAO agreements".to_string());
+        }
+
+        let mut agreement = match self.dao_agreements.get(&agreement_id) {
+            Ok(Some(agreement)) => agreement,
+            Ok(None) => return Err("DAO Agreement not found".to_string()),
+            Err(e) => return Err(format!("Failed to get DAO agreement: {:?}", e)),
+        };
+
+        let caller_str = format!("{:?}", self.owner);
+        if agreement.creator != self.owner && !agreement.participants.contains(&caller_str) {
+            return Err("Only agreement participants can vote".to_string());
+        }
+
+        // Find the milestone
+        let milestone_index = agreement
+            .milestones
+            .iter()
+            .position(|m| m.id == milestone_id)
+            .ok_or("Milestone not found")?;
+
+        let milestone = &mut agreement.milestones[milestone_index];
+
+        if !matches!(
+            milestone.status,
+            MilestoneStatus::ReadyForVoting | MilestoneStatus::VotingActive
+        ) {
+            return Err("Milestone is not ready for voting".to_string());
+        }
+
+        milestone.votes.insert(caller_str.clone(), approve);
+        milestone.status = MilestoneStatus::VotingActive;
+
+        let total_participants = agreement.participants.len() + 1; // +1 for creator
+        let approval_votes = milestone.votes.values().filter(|&&v| v).count();
+        let required_votes = (total_participants * agreement.voting_threshold as usize + 99) / 100;
+
+        let vote_result = if approval_votes >= required_votes {
+            milestone.status = MilestoneStatus::Approved;
+            "Milestone approved by DAO vote"
+        } else {
+            let rejection_votes = milestone.votes.values().filter(|&&v| !v).count();
+            if rejection_votes > total_participants - required_votes {
+                milestone.status = MilestoneStatus::Rejected;
+                "Milestone rejected by DAO vote"
+            } else {
+                "Vote recorded, waiting for more votes"
+            }
+        };
+
+        self.dao_agreements
+            .insert(agreement_id, agreement)
+            .map_err(|e| format!("Failed to record vote: {:?}", e))?;
+
+        Ok(vote_result.to_string())
+    }
+
+    /// Mark milestone as executed (simulated payment)
+    pub fn execute_milestone(
+        &mut self,
+        agreement_id: String,
+        milestone_id: u64,
+    ) -> Result<String, String> {
+        if self.context_type != ContextType::DaoAgreement {
+            return Err("This context is not configured for DAO agreements".to_string());
+        }
+
+        let mut agreement = match self.dao_agreements.get(&agreement_id) {
+            Ok(Some(agreement)) => agreement,
+            Ok(None) => return Err("DAO Agreement not found".to_string()),
+            Err(e) => return Err(format!("Failed to get DAO agreement: {:?}", e)),
+        };
+
+        // Find the milestone
+        let milestone_index = agreement
+            .milestones
+            .iter()
+            .position(|m| m.id == milestone_id)
+            .ok_or("Milestone not found")?;
+
+        let milestone = &mut agreement.milestones[milestone_index];
+
+        if !matches!(milestone.status, MilestoneStatus::Approved) {
+            return Err("Milestone is not approved for execution".to_string());
+        }
+
+        if agreement.remaining_balance < milestone.amount {
+            return Err(format!(
+                "Insufficient escrow balance. Required: {}, Available: {}",
+                milestone.amount, agreement.remaining_balance
+            ));
+        }
+
+        // Update milestone status
+        milestone.status = MilestoneStatus::Executed;
+        milestone.completed_at = Some(env::time_now());
+
+        // Update agreement balance
+        agreement.remaining_balance = agreement.remaining_balance - milestone.amount;
+
+        // Capture values we need for the return message before moving agreement
+        let milestone_title = milestone.title.clone();
+        let milestone_amount = milestone.amount;
+        let remaining_balance = agreement.remaining_balance;
+
+        self.dao_agreements
+            .insert(agreement_id.clone(), agreement)
+            .map_err(|e| format!("Failed to execute milestone: {:?}", e))?;
+
+        Ok(format!(
+            "Milestone '{}' executed successfully. Payment: {} tokens. Remaining balance: {}",
+            milestone_title, milestone_amount, remaining_balance
+        ))
+    }
+
+    /// Get DAO agreement details
+    pub fn get_dao_agreement(&self, agreement_id: String) -> Result<DaoAgreement, String> {
+        if self.context_type != ContextType::DaoAgreement {
+            return Err("This context is not configured for DAO agreements".to_string());
+        }
+
+        match self.dao_agreements.get(&agreement_id) {
+            Ok(Some(agreement)) => Ok(agreement),
+            Ok(None) => Err("DAO Agreement not found".to_string()),
+            Err(e) => Err(format!("Failed to get DAO agreement: {:?}", e)),
+        }
+    }
+
+    /// List all DAO agreements in this context
+    pub fn list_dao_agreements(&self) -> Result<Vec<DaoAgreement>, String> {
+        if self.context_type != ContextType::DaoAgreement {
+            return Err("This context is not configured for DAO agreements".to_string());
+        }
+
+        let mut agreements = Vec::new();
+        if let Ok(entries) = self.dao_agreements.entries() {
+            for (_, agreement) in entries {
+                agreements.push(agreement);
+            }
+        }
+        Ok(agreements)
+    }
+
+    /// Get milestone details
+    pub fn get_milestone_details(
+        &self,
+        agreement_id: String,
+        milestone_id: u64,
+    ) -> Result<DaoMilestone, String> {
+        if self.context_type != ContextType::DaoAgreement {
+            return Err("This context is not configured for DAO agreements".to_string());
+        }
+
+        let agreement = match self.dao_agreements.get(&agreement_id) {
+            Ok(Some(agreement)) => agreement,
+            Ok(None) => return Err("DAO Agreement not found".to_string()),
+            Err(e) => return Err(format!("Failed to get DAO agreement: {:?}", e)),
+        };
+
+        let milestone = agreement
+            .milestones
+            .iter()
+            .find(|m| m.id == milestone_id)
+            .ok_or("Milestone not found")?;
+
+        Ok(milestone.clone())
+    }
+
+    /// Get voting status for a milestone
+    pub fn get_milestone_voting_status(
+        &self,
+        agreement_id: String,
+        milestone_id: u64,
+    ) -> Result<MilestoneVotingInfo, String> {
+        if self.context_type != ContextType::DaoAgreement {
+            return Err("This context is not configured for DAO agreements".to_string());
+        }
+
+        let agreement = match self.dao_agreements.get(&agreement_id) {
+            Ok(Some(agreement)) => agreement,
+            Ok(None) => return Err("DAO Agreement not found".to_string()),
+            Err(e) => return Err(format!("Failed to get DAO agreement: {:?}", e)),
+        };
+
+        let milestone = agreement
+            .milestones
+            .iter()
+            .find(|m| m.id == milestone_id)
+            .ok_or("Milestone not found")?;
+
+        let total_participants = agreement.participants.len() + 1; // +1 for creator
+        let approval_votes = milestone.votes.values().filter(|&&v| v).count();
+        let rejection_votes = milestone.votes.values().filter(|&&v| !v).count();
+        let required_votes = (total_participants * agreement.voting_threshold as usize + 99) / 100;
+
+        Ok(MilestoneVotingInfo {
+            milestone_id,
+            status: milestone.status.clone(),
+            approval_votes: approval_votes as u64,
+            rejection_votes: rejection_votes as u64,
+            total_participants: total_participants as u64,
+            required_votes: required_votes as u64,
+            voting_threshold: agreement.voting_threshold,
+        })
+    }
+
+    /// List all joined contexts
+    pub fn list_joined_contexts(&self) -> Result<Vec<ContextMetadata>, String> {
+        if !self.is_private {
+            return Err("Joined contexts can only be accessed in private context".to_string());
+        }
+
+        let mut contexts = Vec::new();
+        if let Ok(entries) = self.joined_contexts.entries() {
+            for (_, metadata) in entries {
+                contexts.push(metadata.clone());
+            }
+        }
+
+        // Sort by context type first, then by context name
+        contexts.sort_by(|a, b| match (&a.context_type, &b.context_type) {
+            (ContextType::Default, ContextType::DaoAgreement) => std::cmp::Ordering::Less,
+            (ContextType::DaoAgreement, ContextType::Default) => std::cmp::Ordering::Greater,
+            _ => a.context_name.cmp(&b.context_name),
+        });
+
+        Ok(contexts)
+    }
+
+    /// Get context type
+    pub fn get_context_type(&self) -> ContextType {
+        self.context_type.clone()
+    }
 }
 
 fn cosine_similarity(a: &Vec<f32>, b: &Vec<f32>) -> f32 {
@@ -1068,4 +1612,18 @@ fn cosine_similarity(a: &Vec<f32>, b: &Vec<f32>) -> f32 {
     } else {
         dot_product / (norm_a * norm_b)
     }
+}
+
+/// Milestone voting information
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[borsh(crate = "calimero_sdk::borsh")]
+#[serde(crate = "calimero_sdk::serde")]
+pub struct MilestoneVotingInfo {
+    pub milestone_id: u64,
+    pub status: MilestoneStatus,
+    pub approval_votes: u64,
+    pub rejection_votes: u64,
+    pub total_participants: u64,
+    pub required_votes: u64,
+    pub voting_threshold: u8,
 }
