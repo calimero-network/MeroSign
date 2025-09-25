@@ -31,12 +31,14 @@ const CreateAgreementTypeModal: React.FC<CreateAgreementTypeModalProps> = ({
         'Audit trail Powered by ICP',
         'AI legal assistant',
       ],
-      color: 'text-blue-600 dark:text-blue-400',
-      bg: 'bg-blue-50 dark:bg-blue-950/30',
-      iconBg: 'bg-blue-100 dark:bg-blue-900/40',
-      border: 'border-blue-200/60 dark:border-blue-800/40',
+      color: mode === 'dark' ? 'text-blue-400' : 'text-blue-600',
+      bg: mode === 'dark' ? 'bg-blue-950/30' : 'bg-blue-50',
+      iconBg: mode === 'dark' ? 'bg-blue-900/40' : 'bg-blue-100',
+      border: mode === 'dark' ? 'border-blue-800/40' : 'border-blue-200/60',
       hover:
-        'hover:border-blue-300/80 dark:hover:border-blue-700/60 hover:shadow-lg hover:shadow-blue-100/50 dark:hover:shadow-blue-900/20',
+        mode === 'dark'
+          ? 'hover:border-blue-700/60 hover:shadow-lg hover:shadow-blue-900/20'
+          : 'hover:border-blue-300/80 hover:shadow-lg hover:shadow-blue-100/50',
     },
     {
       type: 'dao' as const,
@@ -50,12 +52,14 @@ const CreateAgreementTypeModal: React.FC<CreateAgreementTypeModalProps> = ({
         'Milestone-based funding',
         'Voting mechanisms',
       ],
-      color: 'text-teal-600 dark:text-teal-400',
-      bg: 'bg-teal-50 dark:bg-teal-950/30',
-      iconBg: 'bg-teal-100 dark:bg-teal-900/40',
-      border: 'border-teal-200/60 dark:border-teal-800/40',
+      color: mode === 'dark' ? 'text-teal-400' : 'text-teal-600',
+      bg: mode === 'dark' ? 'bg-teal-950/30' : 'bg-teal-50',
+      iconBg: mode === 'dark' ? 'bg-teal-900/40' : 'bg-teal-100',
+      border: mode === 'dark' ? 'border-teal-800/40' : 'border-teal-200/60',
       hover:
-        'hover:border-teal-300/80 dark:hover:border-teal-700/60 hover:shadow-lg hover:shadow-teal-100/50 dark:hover:shadow-teal-900/20',
+        mode === 'dark'
+          ? 'hover:border-teal-700/60 hover:shadow-lg hover:shadow-teal-900/20'
+          : 'hover:border-teal-300/80 hover:shadow-lg hover:shadow-teal-100/50',
     },
   ];
 
@@ -105,7 +109,9 @@ const CreateAgreementTypeModal: React.FC<CreateAgreementTypeModalProps> = ({
                   onClick={() => onSelectType(type.type)}
                 >
                   {/* Subtle gradient overlay */}
-                  <div className="absolute inset-0 bg-gradient-to-br from-transparent via-transparent to-black/[0.02] dark:to-white/[0.02] pointer-events-none" />
+                  <div
+                    className={`absolute inset-0 bg-gradient-to-br from-transparent via-transparent ${mode === 'dark' ? 'to-white/[0.02]' : 'to-black/[0.02]'} pointer-events-none`}
+                  />
 
                   {/* Header Section */}
                   <div className="relative z-10 flex items-start gap-3 sm:gap-5 mb-4 sm:mb-6">

@@ -155,7 +155,9 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
                       ? daoStep === 1 && daoAgreementCreated
                         ? 'bg-green-500 text-white'
                         : 'bg-primary text-white'
-                      : 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+                      : mode === 'dark'
+                        ? 'bg-gray-700 text-gray-400'
+                        : 'bg-gray-200 text-gray-600'
                 }`}
               >
                 {step < daoStep || (step === 1 && daoAgreementCreated) ? (
@@ -166,7 +168,9 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
               </div>
             ))}
           </div>
-          <div className="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
+          <div
+            className={`w-full rounded-full h-2 ${mode === 'dark' ? 'bg-gray-700' : 'bg-gray-200'}`}
+          >
             <div
               className="bg-primary h-2 rounded-full transition-all duration-300"
               style={{
@@ -337,7 +341,7 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
                                 generatingInvitationPayload
                               }
                               size="sm"
-                              className={`dark:text-black disabled:opacity-50 disabled:cursor-not-allowed`}
+                              className={`${mode === 'dark' ? 'text-white' : 'text-black'} disabled:opacity-50 disabled:cursor-not-allowed`}
                             >
                               {generatingInvitationPayload ? (
                                 <>
@@ -401,7 +405,7 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
                             !currentParticipant.contextId ||
                             !currentParticipant.icpId
                           }
-                          className={`w-full flex items-center gap-2 dark:text-black disabled:opacity-50 disabled:cursor-not-allowed`}
+                          className={`w-full flex items-center gap-2 ${mode === 'dark' ? 'text-white' : 'text-black'} disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                           <Plus className="w-4 h-4" />
                           Add Participant
@@ -443,7 +447,11 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
                                   onClick={() => removeParticipant(index)}
                                   variant="ghost"
                                   size="sm"
-                                  className={`text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300`}
+                                  className={`${
+                                    mode === 'dark'
+                                      ? 'text-red-400 hover:text-red-300'
+                                      : 'text-red-500 hover:text-red-700'
+                                  }`}
                                 >
                                   <X className="w-4 h-4" />
                                 </Button>
@@ -492,7 +500,10 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
                         <p className="text-sm text-muted-foreground mb-3">
                           Select PDF, DOC, or TXT files (max 10MB each)
                         </p>
-                        <Button variant="outline" className="dark:text-black">
+                        <Button
+                          variant="outline"
+                          className={`${mode === 'dark' ? 'text-white' : 'text-black'}`}
+                        >
                           Browse Files
                         </Button>
                       </div>
@@ -544,7 +555,11 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
                                   onClick={() => removeDocument(index)}
                                   variant="ghost"
                                   size="sm"
-                                  className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 flex-shrink-0"
+                                  className={`${
+                                    mode === 'dark'
+                                      ? 'text-red-400 hover:text-red-300'
+                                      : 'text-red-500 hover:text-red-700'
+                                  } flex-shrink-0`}
                                 >
                                   <X className="w-4 h-4" />
                                 </Button>
@@ -957,7 +972,7 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
                                 !currentMilestone.votingDuration ||
                                 !currentMilestone.votingUnit))
                           }
-                          className="w-full dark:text-black"
+                          className={`w-full ${mode === 'dark' ? 'text-white' : 'text-black'}`}
                         >
                           <Plus className="w-4 h-4 mr-2" />
                           Add Milestone
@@ -1002,7 +1017,11 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
                                     }
                                     variant="ghost"
                                     size="sm"
-                                    className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                                    className={`${
+                                      mode === 'dark'
+                                        ? 'text-red-400 hover:text-red-300'
+                                        : 'text-red-500 hover:text-red-700'
+                                    }`}
                                   >
                                     <X className="w-4 h-4" />
                                   </Button>
@@ -1422,7 +1441,7 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
             <Button
               onClick={handleNextStep}
               disabled={!canProceedToNextStep()}
-              className={`flex items-center gap-2 dark:text-black disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={`flex items-center gap-2 ${mode === 'dark' ? 'text-black' : 'text-white'} disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               Next
               <ChevronRight className="w-4 h-4" />
@@ -1431,7 +1450,7 @@ const DaoCreateModal: React.FC<DaoCreateModalProps> = ({
             <Button
               onClick={handleCreateDaoAgreement}
               disabled={creating}
-              className={`flex items-center gap-2 dark:text-black disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={`flex items-center gap-2 ${mode === 'dark' ? 'text-black' : 'text-white'} disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               {creating ? 'Creating...' : 'Create Agreement'}
             </Button>
