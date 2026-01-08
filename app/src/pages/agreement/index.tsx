@@ -7,7 +7,18 @@ import React, {
   useMemo,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { blobClient, useCalimero } from '@calimero-network/calimero-client';
+import {
+  blobClient,
+  useCalimero,
+  apiClient,
+  setContextId,
+  setExecutorPublicKey,
+  getContextId,
+  getExecutorPublicKey,
+} from '@calimero-network/calimero-client';
+import type { ResponseData } from '@calimero-network/calimero-client';
+import type { ContextInviteByOpenInvitationResponse } from '@calimero-network/calimero-client/lib/api/nodeApi';
+import { generateInvitationUrl } from '../../utils/invitation';
 import {
   ArrowLeft,
   Plus,
@@ -163,33 +174,7 @@ const NotificationPopup: React.FC<{
   </Box>
 );
 
-const generateInvitePayload = async (
-  nodeApiService: ContextApiDataSource,
-  contextId: string,
-  inviter: string,
-  invitee: string,
-): Promise<string> => {
-  try {
-    const response = await nodeApiService.inviteToContext({
-      contextId,
-      inviter,
-      invitee,
-    });
-
-    if (response && typeof response === 'object' && 'data' in response) {
-      return response.data as string;
-    }
-
-    if (typeof response === 'string') {
-      return response;
-    }
-
-    return JSON.stringify(response, null, 2);
-  } catch (error) {
-    console.error('Failed to generate invite:', error);
-    return `INVITE_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }
-};
+// Old invitation flow removed - now using open invitation
 
 const getStageDescription = (stage: FileUpload['stage']): string => {
   switch (stage) {
@@ -206,17 +191,6 @@ const getStageDescription = (stage: FileUpload['stage']): string => {
   }
 };
 
-const calculateFileHash = async (data: Uint8Array): Promise<string> => {
-  const buffer = new Uint8Array(data);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-};
-
-const sanitizeDocumentId = (documentId: string): string => {
-  return documentId.replace(/[^a-zA-Z0-9_-]/g, '_');
-};
-
 const AgreementPage: React.FC = () => {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -228,12 +202,11 @@ const AgreementPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showParticipants, setShowParticipants] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteMode, setInviteMode] = useState<'url' | 'payload'>('url');
   const [inviteId, setInviteId] = useState('');
-  const [invitePermission, setInvitePermission] = useState<PermissionLevel>(
-    PermissionLevel.Sign,
-  );
+  const [invitePermission] = useState<PermissionLevel>(PermissionLevel.Sign);
+  const [invitationUrl, setInvitationUrl] = useState<string | null>(null);
   const [generatedPayload, setGeneratedPayload] = useState('');
-  const [showPayloadDialog, setShowPayloadDialog] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [generatingInvite, setGeneratingInvite] = useState(false);
   const [documents, setDocuments] = useState<UploadedDocument[]>([]);
@@ -243,7 +216,6 @@ const AgreementPage: React.FC = () => {
   const [showPDFViewer, setShowPDFViewer] = useState(false);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [loadingPDFPreview, setLoadingPDFPreview] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [contextDetails, setContextDetails] = useState<ContextDetails | null>(
     null,
@@ -301,6 +273,10 @@ const AgreementPage: React.FC = () => {
         'agreementContextUserID',
       );
 
+      if (agreementContextUserID) {
+        setExecutorPublicKey(agreementContextUserID);
+      }
+
       const response = await clientApiService.getContextDetails(
         currentContextId,
         agreementContextID || undefined,
@@ -333,6 +309,9 @@ const AgreementPage: React.FC = () => {
       const agreementContextUserID = localStorage.getItem(
         'agreementContextUserID',
       );
+      if (agreementContextUserID) {
+        setExecutorPublicKey(agreementContextUserID);
+      }
 
       const response = await documentService.listDocuments(
         currentContextId,
@@ -381,6 +360,16 @@ const AgreementPage: React.FC = () => {
     if (!currentContextId) {
       console.error('No context ID available');
       return;
+    }
+
+    // Set context ID and executor public key in Calimero client state when page loads
+    // This ensures the context is available for all API calls
+    const agreementContextUserID = localStorage.getItem(
+      'agreementContextUserID',
+    );
+    if (agreementContextUserID) {
+      setContextId(currentContextId);
+      setExecutorPublicKey(agreementContextUserID);
     }
 
     loadContextDetails();
@@ -599,7 +588,6 @@ const AgreementPage: React.FC = () => {
       }
 
       try {
-        setLoadingPDFPreview(true);
         const contextID = localStorage.getItem('agreementContextID');
         const blob = await blobClient.downloadBlob(
           document.pdfBlobId,
@@ -620,8 +608,6 @@ const AgreementPage: React.FC = () => {
           error,
         );
         showNotification(`Failed to load PDF: "${document.name}".`, 'error');
-      } finally {
-        setLoadingPDFPreview(false);
       }
     },
     [showNotification, app],
@@ -672,21 +658,24 @@ const AgreementPage: React.FC = () => {
     [showNotification, app],
   );
 
-  const handleGenerateInvite = useCallback(async () => {
-    if (!currentContextId || !inviteId.trim()) {
-      showNotification('Please enter a valid invitee ID.', 'error');
-      return;
-    }
-
+  const handleGenerateOpenInvitation = useCallback(async () => {
     const agreementContextUserID = localStorage.getItem(
       'agreementContextUserID',
     );
 
     const agreementContextID = localStorage.getItem('agreementContextID');
 
-    if (!agreementContextUserID) {
+    if (!agreementContextUserID || !agreementContextID) {
       showNotification(
-        'User ID not found. Please ensure you are logged in.',
+        'Context information not found. Please ensure you are in an agreement.',
+        'error',
+      );
+      return;
+    }
+
+    if (!app) {
+      showNotification(
+        'Calimero client not initialized. Please wait and try again.',
         'error',
       );
       return;
@@ -694,39 +683,147 @@ const AgreementPage: React.FC = () => {
 
     try {
       setGeneratingInvite(true);
-      const payload = await generateInvitePayload(
-        nodeApiService,
-        currentContextId,
-        agreementContextUserID,
-        inviteId.trim(),
-      );
-      setGeneratedPayload(payload);
-      setShowPayloadDialog(true);
-      setShowInviteModal(false);
 
-      const addResp = await clientApiService.addParticipant(
-        currentContextId,
-        inviteId.trim(),
-        invitePermission,
-        agreementContextID || undefined,
-        agreementContextUserID || undefined,
-      );
-      if (addResp.error) {
+      // Ensure context ID and executor public key are set in Calimero client state
+      // This is required for the API to work properly
+      setContextId(agreementContextID);
+      setExecutorPublicKey(agreementContextUserID);
+
+      // Verify the context is set (like the reference app does)
+      // The reference app uses getContextId() and getExecutorPublicKey() to verify
+      const currentContextId = getContextId();
+      const currentExecutorPublicKey = getExecutorPublicKey();
+
+      if (!currentContextId || !currentExecutorPublicKey) {
         showNotification(
-          'Failed to add participant: ' + addResp.error.message,
+          'Context not properly initialized. Please try again.',
           'error',
         );
+        return;
       }
-      setInviteId('');
-      setInvitePermission(PermissionLevel.Sign);
+
+      // Generate open invitation using the new API
+      // Use the values from the client state (like reference app)
+      const response: ResponseData<ContextInviteByOpenInvitationResponse> =
+        await apiClient.node().contextInviteByOpenInvitation(
+          currentContextId,
+          currentExecutorPublicKey,
+          86400, // 24 hours TTL
+        );
+
+      if (response.error) {
+        showNotification(
+          response.error.message || 'Failed to generate invitation',
+          'error',
+        );
+        return;
+      }
+
+      if (!response.data) {
+        showNotification('Failed to generate invitation', 'error');
+        return;
+      }
+
+      // Generate invitation URL
+      const invitationPayload = JSON.stringify(response.data);
+      const url = generateInvitationUrl(invitationPayload);
+      setInvitationUrl(url);
+
+      showNotification(
+        'Invitation URL created! Share it with participants.',
+        'success',
+      );
     } catch (error) {
-      console.error('Failed to generate invite:', error);
-      showNotification('Failed to generate invite. Please try again.', 'error');
+      console.error('Failed to generate invitation:', error);
+      showNotification(
+        'Failed to generate invitation. Please try again.',
+        'error',
+      );
+    } finally {
+      setGeneratingInvite(false);
+    }
+  }, [showNotification, app]);
+
+  const handleCopyInvitationUrl = useCallback(() => {
+    if (invitationUrl) {
+      navigator.clipboard.writeText(invitationUrl);
+      showNotification('Invitation URL copied to clipboard!', 'success');
+    }
+  }, [invitationUrl, showNotification]);
+
+  const handleGeneratePayload = useCallback(async () => {
+    if (!inviteId.trim()) {
+      showNotification('Please enter an invitee ID', 'error');
+      return;
+    }
+
+    const agreementContextUserID = localStorage.getItem(
+      'agreementContextUserID',
+    );
+    const agreementContextID = localStorage.getItem('agreementContextID');
+
+    if (!agreementContextUserID || !agreementContextID) {
+      showNotification(
+        'Context information not found. Please ensure you are in an agreement.',
+        'error',
+      );
+      return;
+    }
+
+    try {
+      setGeneratingInvite(true);
+
+      // Step 1: Generate the invitation payload
+      const response = await nodeApiService.inviteToContext({
+        contextId: agreementContextID,
+        inviter: agreementContextUserID,
+        invitee: inviteId.trim(),
+      });
+
+      if (response.error) {
+        showNotification(
+          response.error.message || 'Failed to generate payload',
+          'error',
+        );
+        return;
+      }
+
+      if (!response.data) {
+        showNotification(
+          'Failed to generate payload: No data returned',
+          'error',
+        );
+        return;
+      }
+
+      // Step 2: Pre-register the invitee as a participant with the selected permission
+      const addParticipantResponse = await clientApiService.addParticipant(
+        agreementContextID,
+        inviteId.trim(),
+        invitePermission,
+        agreementContextID,
+        agreementContextUserID,
+      );
+
+      if (addParticipantResponse.error) {
+        // Log the error but don't fail the entire flow - the user can still join and register themselves
+        console.warn(
+          'Failed to pre-register participant, but invitation was generated:',
+          addParticipantResponse.error,
+        );
+        // Still show success since the invitation was generated
+        // The invitee can register themselves when they join
+      }
+
+      setGeneratedPayload(response.data);
+      showNotification('Payload generated!', 'success');
+    } catch (error) {
+      console.error('Failed to generate payload:', error);
+      showNotification('Failed to generate payload', 'error');
     } finally {
       setGeneratingInvite(false);
     }
   }, [
-    currentContextId,
     inviteId,
     invitePermission,
     nodeApiService,
@@ -735,28 +832,26 @@ const AgreementPage: React.FC = () => {
   ]);
 
   const handleCopyPayload = useCallback(() => {
-    navigator.clipboard.writeText(generatedPayload);
-    showNotification('Payload copied to clipboard!', 'success');
-    setShowPayloadDialog(false);
+    if (generatedPayload) {
+      navigator.clipboard.writeText(generatedPayload);
+      showNotification('Payload copied to clipboard!', 'success');
+    }
   }, [generatedPayload, showNotification]);
 
-  const handleVerifyDocument = useCallback(
-    async (doc: UploadedDocument) => {
-      // ICP verification removed - TODO: Implement Calimero-based verification
-      setSelectedDocumentForVerification(doc);
-      setShowVerificationModal(true);
-      setVerifyingDocId(doc.id);
-      setVerifyResult({
-        error: {
-          message:
-            'Document verification is currently unavailable. This feature will be re-implemented using Calimero.',
-        },
-        documentId: doc.id,
-      });
-      setVerifyingDocId(null);
-    },
-    [],
-  );
+  const handleVerifyDocument = useCallback(async (doc: UploadedDocument) => {
+    // TODO: Implement Calimero-based verification
+    setSelectedDocumentForVerification(doc);
+    setShowVerificationModal(true);
+    setVerifyingDocId(doc.id);
+    setVerifyResult({
+      error: {
+        message:
+          'Document verification is currently unavailable. This feature will be re-implemented using Calimero.',
+      },
+      documentId: doc.id,
+    });
+    setVerifyingDocId(null);
+  }, []);
 
   const handleCloseVerificationModal = useCallback(() => {
     setShowVerificationModal(false);
@@ -1435,154 +1530,236 @@ const AgreementPage: React.FC = () => {
         </Box>
       </motion.div>
 
-      {/* Invite Modal */}
+      {/* Invite Modal - Both URL and Payload Options */}
       {showInviteModal && (
         <Modal
           open={showInviteModal}
-          onClose={() => setShowInviteModal(false)}
-          title="Create Invite"
+          onClose={() => {
+            setShowInviteModal(false);
+            setInvitationUrl(null);
+            setGeneratedPayload('');
+            setInviteId('');
+            setInviteMode('url');
+          }}
+          title="Create Invitation"
         >
           <Box style={{ padding: spacing[6].value }}>
-            <Input
-              type="text"
-              placeholder="Enter the ID of invitee"
-              value={inviteId}
-              onChange={(e) => setInviteId(e.target.value)}
-              disabled={generatingInvite}
-              style={{ marginBottom: spacing[3].value }}
-            />
-
-            <Text
-              size="sm"
-              weight="medium"
-              style={{
-                marginBottom: spacing[2].value,
-                marginTop: spacing[2].value,
-              }}
-            >
-              Permission Level
-            </Text>
-            <Box
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: spacing[2].value,
-              }}
-            >
-              <label style={{ display: 'flex', alignItems: 'center' }}>
-                <input
-                  type="radio"
-                  value={PermissionLevel.Sign}
-                  checked={invitePermission === PermissionLevel.Sign}
-                  onChange={() => setInvitePermission(PermissionLevel.Sign)}
-                  style={{ marginRight: spacing[3].value }}
-                  disabled={generatingInvite}
-                />
-                <Box>
-                  <Text size="sm" weight="medium">
-                    Signer
-                  </Text>
-                  <Text size="xs" style={{ color: colors.neutral[600].value }}>
-                    Can view and sign documents
-                  </Text>
-                </Box>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center' }}>
-                <input
-                  type="radio"
-                  value={PermissionLevel.Read}
-                  checked={invitePermission === PermissionLevel.Read}
-                  onChange={() => setInvitePermission(PermissionLevel.Read)}
-                  style={{ marginRight: spacing[3].value }}
-                  disabled={generatingInvite}
-                />
-                <Box>
-                  <Text size="sm" weight="medium">
-                    Viewer
-                  </Text>
-                  <Text size="xs" style={{ color: colors.neutral[600].value }}>
-                    Can only view documents
-                  </Text>
-                </Box>
-              </label>
-            </Box>
-
-            <Button
-              onClick={handleGenerateInvite}
-              disabled={generatingInvite || !inviteId.trim()}
-              variant="primary"
-              style={{ width: '100%', marginTop: spacing[4].value }}
-            >
-              {generatingInvite ? (
-                <Flex alignItems="center" gap="sm">
-                  <Loader size="small" />
-                  <Text>Generating...</Text>
-                </Flex>
-              ) : (
-                'Generate Invite'
-              )}
-            </Button>
-          </Box>
-        </Modal>
-      )}
-
-      {/* Payload Dialog */}
-      {showPayloadDialog && (
-        <Modal
-          open={showPayloadDialog}
-          onClose={() => setShowPayloadDialog(false)}
-          title="Generated Invite Payload"
-        >
-          <Box style={{ padding: spacing[6].value }}>
-            <Card
-              style={{
-                padding: spacing[4].value,
-                borderRadius: radius.md.value,
-                backgroundColor: colors.background.secondary.value,
-              }}
-            >
-              <Text
-                size="sm"
-                style={{
-                  color: colors.neutral[600].value,
-                  marginBottom: spacing[2].value,
-                }}
-              >
-                Your invite payload:
-              </Text>
-              <Box
-                style={{
-                  backgroundColor: colors.background.primary.value,
-                  borderRadius: radius.md.value,
-                  padding: spacing[3].value,
-                  wordBreak: 'break-all',
-                  minHeight: '100px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  fontFamily: 'monospace',
-                  fontSize: '14px',
-                }}
-              >
-                {generatedPayload || 'Loading...'}
-              </Box>
-            </Card>
-
-            <Flex gap="sm" style={{ marginTop: spacing[4].value }}>
+            {/* Mode Selection */}
+            <Flex gap="sm" style={{ marginBottom: spacing[4].value }}>
               <Button
-                onClick={handleCopyPayload}
-                variant="primary"
+                variant={inviteMode === 'url' ? 'primary' : 'secondary'}
+                onClick={() => {
+                  setInviteMode('url');
+                  setInvitationUrl(null);
+                  setGeneratedPayload('');
+                }}
                 style={{ flex: 1 }}
               >
-                Copy Payload
+                Invitation URL
               </Button>
               <Button
-                variant="secondary"
-                onClick={() => setShowPayloadDialog(false)}
+                variant={inviteMode === 'payload' ? 'primary' : 'secondary'}
+                onClick={() => {
+                  setInviteMode('payload');
+                  setInvitationUrl(null);
+                  setGeneratedPayload('');
+                }}
                 style={{ flex: 1 }}
               >
-                Close
+                Invitation Payload
               </Button>
             </Flex>
+
+            {inviteMode === 'url' ? (
+              // URL Mode
+              invitationUrl ? (
+                <>
+                  <Card
+                    style={{
+                      padding: spacing[4].value,
+                      borderRadius: radius.md.value,
+                      backgroundColor: colors.background.secondary.value,
+                      marginBottom: spacing[4].value,
+                    }}
+                  >
+                    <Text
+                      size="sm"
+                      weight="semibold"
+                      style={{
+                        color: colors.semantic.success.value,
+                        marginBottom: spacing[2].value,
+                      }}
+                    >
+                      ✓ Invitation Created
+                    </Text>
+                    <Text
+                      size="sm"
+                      style={{
+                        color: colors.neutral[600].value,
+                        marginBottom: spacing[3].value,
+                      }}
+                    >
+                      Share this URL with participants to invite them to this
+                      agreement:
+                    </Text>
+                    <Input
+                      type="text"
+                      value={invitationUrl}
+                      disabled={true}
+                      style={{
+                        marginBottom: spacing[3].value,
+                        fontFamily: 'monospace',
+                        fontSize: '12px',
+                      }}
+                    />
+                    <Button
+                      onClick={handleCopyInvitationUrl}
+                      variant="primary"
+                      style={{ width: '100%' }}
+                    >
+                      Copy Invitation URL
+                    </Button>
+                  </Card>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setShowInviteModal(false);
+                      setInvitationUrl(null);
+                      setInviteMode('url');
+                    }}
+                    style={{ width: '100%' }}
+                  >
+                    Close
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Text
+                    size="sm"
+                    style={{
+                      color: colors.neutral[600].value,
+                      marginBottom: spacing[4].value,
+                    }}
+                  >
+                    Generate an invitation URL that participants can use to join
+                    this agreement. They will be able to join by clicking the
+                    link.
+                  </Text>
+                  <Button
+                    onClick={handleGenerateOpenInvitation}
+                    disabled={generatingInvite}
+                    variant="primary"
+                    style={{ width: '100%' }}
+                  >
+                    {generatingInvite ? (
+                      <Flex alignItems="center" gap="sm">
+                        <Loader size="small" />
+                        <Text>Creating Invitation...</Text>
+                      </Flex>
+                    ) : (
+                      'Create Invitation URL'
+                    )}
+                  </Button>
+                </>
+              )
+            ) : // Payload Mode
+            generatedPayload ? (
+              <>
+                <Card
+                  style={{
+                    padding: spacing[4].value,
+                    borderRadius: radius.md.value,
+                    backgroundColor: colors.background.secondary.value,
+                    marginBottom: spacing[4].value,
+                  }}
+                >
+                  <Text
+                    size="sm"
+                    weight="semibold"
+                    style={{
+                      color: colors.semantic.success.value,
+                      marginBottom: spacing[2].value,
+                    }}
+                  >
+                    ✓ Payload Generated
+                  </Text>
+                  <Text
+                    size="sm"
+                    style={{
+                      color: colors.neutral[600].value,
+                      marginBottom: spacing[3].value,
+                    }}
+                  >
+                    Share this payload with the invitee to join this agreement:
+                  </Text>
+                  <Input
+                    type="text"
+                    value={generatedPayload}
+                    disabled={true}
+                    style={{
+                      marginBottom: spacing[3].value,
+                      fontFamily: 'monospace',
+                      fontSize: '12px',
+                    }}
+                  />
+                  <Button
+                    onClick={handleCopyPayload}
+                    variant="primary"
+                    style={{ width: '100%' }}
+                  >
+                    Copy Payload
+                  </Button>
+                </Card>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setShowInviteModal(false);
+                    setGeneratedPayload('');
+                    setInviteId('');
+                    setInviteMode('payload');
+                  }}
+                  style={{ width: '100%' }}
+                >
+                  Close
+                </Button>
+              </>
+            ) : (
+              <>
+                <Text
+                  size="sm"
+                  style={{
+                    color: colors.neutral[600].value,
+                    marginBottom: spacing[4].value,
+                  }}
+                >
+                  Generate an invitation payload for a specific invitee. You
+                  need to know their user ID.
+                </Text>
+                <Input
+                  type="text"
+                  placeholder="Enter invitee ID"
+                  value={inviteId}
+                  onChange={(e) => setInviteId(e.target.value)}
+                  disabled={generatingInvite}
+                  style={{ marginBottom: spacing[4].value }}
+                />
+                <Button
+                  onClick={handleGeneratePayload}
+                  disabled={generatingInvite || !inviteId.trim()}
+                  variant="primary"
+                  style={{ width: '100%' }}
+                >
+                  {generatingInvite ? (
+                    <Flex alignItems="center" gap="sm">
+                      <Loader size="small" />
+                      <Text>Generating Payload...</Text>
+                    </Flex>
+                  ) : (
+                    'Generate Payload'
+                  )}
+                </Button>
+              </>
+            )}
           </Box>
         </Modal>
       )}

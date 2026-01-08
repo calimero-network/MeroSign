@@ -130,10 +130,10 @@ pub enum PermissionLevel {
     Admin,
 }
 
-#[app::state(emits = MeroDocsEvent)]
+#[app::state(emits = MeroSignEvent)]
 #[derive(BorshDeserialize, BorshSerialize)]
 #[borsh(crate = "calimero_sdk::borsh")]
-pub struct MeroDocsState {
+pub struct MeroSignState {
     // Context type flag
     pub is_private: bool,
 
@@ -203,9 +203,7 @@ pub struct ContextDetails {
 }
 
 #[app::event]
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
-#[borsh(crate = "calimero_sdk::borsh")]
-pub enum MeroDocsEvent {
+pub enum MeroSignEvent {
     // Private context events
     SignatureCreated {
         id: u64,
@@ -249,13 +247,13 @@ pub enum MeroDocsEvent {
 }
 
 #[app::logic]
-impl MeroDocsState {
+impl MeroSignState {
     #[app::init]
-    pub fn init(is_private: bool, context_name: String) -> MeroDocsState {
+    pub fn init(is_private: bool, context_name: String) -> MeroSignState {
         let owner_raw = env::executor_id();
         let owner = UserId::new(owner_raw);
 
-        let mut state = MeroDocsState {
+        let mut state = MeroSignState {
             is_private,
             owner,
             context_name,
@@ -327,7 +325,7 @@ impl MeroDocsState {
             .insert(signature_id.to_string(), signature)
             .map_err(|e| format!("Failed to store signature: {:?}", e))?;
 
-        app::emit!(MeroDocsEvent::SignatureCreated {
+        app::emit!(MeroSignEvent::SignatureCreated {
             id: signature_id,
             name,
             size: data_size,
@@ -346,7 +344,7 @@ impl MeroDocsState {
 
         match self.signatures.remove(&key) {
             Ok(Some(_)) => {
-                app::emit!(MeroDocsEvent::SignatureDeleted { id: signature_id });
+                app::emit!(MeroSignEvent::SignatureDeleted { id: signature_id });
                 Ok(())
             }
             Ok(None) => Err(format!("Signature not found: {}", signature_id)),
@@ -410,7 +408,7 @@ impl MeroDocsState {
             .insert(context_id.clone(), identity_mapping)
             .map_err(|e| format!("Failed to store identity mapping: {:?}", e))?;
 
-        app::emit!(MeroDocsEvent::ContextJoined {
+        app::emit!(MeroSignEvent::ContextJoined {
             context_id,
             context_name
         });
@@ -425,7 +423,7 @@ impl MeroDocsState {
 
         match self.joined_contexts.remove(&context_id) {
             Ok(Some(_)) => {
-                app::emit!(MeroDocsEvent::ContextLeft { context_id });
+                app::emit!(MeroSignEvent::ContextLeft { context_id });
                 Ok(())
             }
             Ok(None) => Err("Context not found".to_string()),
@@ -506,7 +504,6 @@ impl MeroDocsState {
     /// Upload a document
     pub fn upload_document(
         &mut self,
-        context_id: String,
         name: String,
         hash: String,
         pdf_blob_id_str: String,
@@ -556,7 +553,7 @@ impl MeroDocsState {
             .insert(document_id.clone(), Vector::new())
             .map_err(|e| format!("Failed to initialize document signatures: {:?}", e))?;
 
-        app::emit!(MeroDocsEvent::DocumentUploaded {
+        app::emit!(MeroSignEvent::DocumentUploaded {
             id: document_id.clone(),
             name,
             uploaded_by: self.owner,
@@ -566,18 +563,14 @@ impl MeroDocsState {
     }
 
     /// Delete a document by ID
-    pub fn delete_document(
-        &mut self,
-        context_id: String,
-        document_id: String,
-    ) -> Result<(), String> {
+    pub fn delete_document(&mut self, document_id: String) -> Result<(), String> {
         self.validate_admin_permissions()?;
 
         match self.documents.remove(&document_id) {
             Ok(Some(_)) => {
                 let _ = self.document_signatures.remove(&document_id);
 
-                app::emit!(MeroDocsEvent::DocumentDeleted { id: document_id });
+                app::emit!(MeroSignEvent::DocumentDeleted { id: document_id });
 
                 Ok(())
             }
@@ -587,7 +580,7 @@ impl MeroDocsState {
     }
 
     /// List all documents
-    pub fn list_documents(&self, context_id: String) -> Result<Vec<DocumentInfo>, String> {
+    pub fn list_documents(&self) -> Result<Vec<DocumentInfo>, String> {
         let mut documents = Vec::new();
         if let Ok(entries) = self.documents.entries() {
             for (_, document) in entries {
@@ -617,7 +610,6 @@ impl MeroDocsState {
     }
     pub fn sign_document(
         &mut self,
-        context_id: String,
         document_id: String,
         pdf_blob_id_str: String,
         file_size: u64,
@@ -693,7 +685,7 @@ impl MeroDocsState {
             .insert(document_id.clone(), signatures)
             .map_err(|e| format!("Failed to update document signatures: {:?}", e))?;
 
-        app::emit!(MeroDocsEvent::DocumentSigned {
+        app::emit!(MeroSignEvent::DocumentSigned {
             document_id,
             signer: signer_id,
         });
@@ -704,7 +696,6 @@ impl MeroDocsState {
     /// Get signatures for a document
     pub fn get_document_signatures(
         &self,
-        context_id: String,
         document_id: String,
     ) -> Result<Vec<DocumentSignature>, String> {
         let mut signatures = Vec::new();
@@ -721,7 +712,6 @@ impl MeroDocsState {
     /// Update document status to fully signed
     pub fn mark_participant_signed(
         &mut self,
-        context_id: String,
         document_id: String,
         user_id: UserId,
     ) -> Result<(), String> {
@@ -784,10 +774,57 @@ impl MeroDocsState {
         Ok(())
     }
 
-    /// Add participant to shared context
+    /// Register self as participant (for users who joined via open invitation)
+    /// This method allows a user who has joined the context at the node level
+    /// to register themselves in the application state without admin permissions
+    pub fn register_self_as_participant(&mut self) -> Result<(), String> {
+        if self.is_private {
+            return Err("Cannot register as participant in private context".to_string());
+        }
+
+        let executor_id_raw = env::executor_id();
+        let executor_id = UserId::new(executor_id_raw);
+
+        // Check if already a participant
+        if self.participants.contains(&executor_id).unwrap_or(false) {
+            return Err("Already registered as participant".to_string());
+        }
+
+        // Add as participant with Sign permission (can sign documents)
+        self.participants
+            .insert(executor_id)
+            .map_err(|e| format!("Failed to register as participant: {:?}", e))?;
+
+        let user_id_str = format!("{:?}", executor_id);
+        self.permissions
+            .insert(user_id_str, PermissionLevel::Sign)
+            .map_err(|e| format!("Failed to set permissions: {:?}", e))?;
+
+        // Update document statuses since new signer joined
+        let mut docs_to_update = Vec::new();
+        if let Ok(entries) = self.documents.entries() {
+            for (_, document) in entries {
+                if document.status == DocumentStatus::FullySigned {
+                    let mut updated_document = document.clone();
+                    updated_document.status = DocumentStatus::PartiallySigned;
+                    docs_to_update.push(updated_document);
+                }
+            }
+        }
+        for document in docs_to_update {
+            let _ = self.documents.insert(document.id.clone(), document);
+        }
+
+        app::emit!(MeroSignEvent::ParticipantJoined {
+            user_id: executor_id
+        });
+
+        Ok(())
+    }
+
+    /// Add participant to shared context (admin only)
     pub fn add_participant(
         &mut self,
-        context_id: String,
         user_id: UserId,
         permission: PermissionLevel,
     ) -> Result<(), String> {
@@ -822,16 +859,12 @@ impl MeroDocsState {
             }
         }
 
-        app::emit!(MeroDocsEvent::ParticipantJoined { user_id });
+        app::emit!(MeroSignEvent::ParticipantJoined { user_id });
 
         Ok(())
     }
     /// Remove participant from shared context
-    pub fn remove_participant(
-        &mut self,
-        context_id: String,
-        user_id: UserId,
-    ) -> Result<(), String> {
+    pub fn remove_participant(&mut self, user_id: UserId) -> Result<(), String> {
         self.validate_admin_permissions()?;
 
         if !self.participants.contains(&user_id).unwrap_or(false) {
@@ -847,13 +880,13 @@ impl MeroDocsState {
             .remove(&user_id_str)
             .map_err(|e| format!("Failed to remove permissions: {:?}", e))?;
 
-        app::emit!(MeroDocsEvent::ParticipantLeft { user_id });
+        app::emit!(MeroSignEvent::ParticipantLeft { user_id });
 
         Ok(())
     }
 
     /// List all participants
-    pub fn list_participants(&self, context_id: String) -> Result<Vec<UserId>, String> {
+    pub fn list_participants(&self) -> Result<Vec<UserId>, String> {
         let mut participants = Vec::new();
         if let Ok(iter) = self.participants.iter() {
             for participant in iter {
@@ -864,11 +897,7 @@ impl MeroDocsState {
     }
 
     /// Get user permission level
-    pub fn get_user_permission(
-        &self,
-        context_id: String,
-        user_id: UserId,
-    ) -> Result<PermissionLevel, String> {
+    pub fn get_user_permission(&self, user_id: UserId) -> Result<PermissionLevel, String> {
         let user_id_str = format!("{:?}", user_id);
         match self.permissions.get(&user_id_str) {
             Ok(Some(perm)) => Ok(perm.clone()),
